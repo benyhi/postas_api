@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 from pathlib import Path
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -23,10 +24,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-w$%ltt_)i(xmc9pmop=yevl2y!2oay8ea3t9xpg_)z6gf0c$0g'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = []
-
+ALLOWED_HOSTS = [h for h in os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if h]
 
 # Application definition
 
@@ -40,6 +40,7 @@ INSTALLED_APPS = [
 
     'rest_framework',
     'django_filters',
+    'drf_spectacular',
 
     'apps.users',
     'apps.products',
@@ -67,6 +68,30 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    'DEFAULT_FILTER_BACKENDS': (
+        'django_filters.rest_framework.DjangoFilterBackend',
+    ),
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 20,
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'POSTAS API',
+    'DESCRIPTION': 'API para sistema de punto de venta (POS) multi-tenant',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
+    'TAGS': [
+        {'name': 'Auth', 'description': 'Login y refresh de tokens JWT'},
+        {'name': 'Users', 'description': 'CRUD de usuarios (solo OWNER)'},
+        {'name': 'Categories', 'description': 'CRUD de categorias de productos'},
+        {'name': 'Products', 'description': 'CRUD de productos y busqueda'},
+        {'name': 'Cashbox', 'description': 'Apertura, cierre y consulta de cajas'},
+        {'name': 'Sales', 'description': 'Registro, consulta y anulacion de ventas'},
+        {'name': 'Reports', 'description': 'Reportes de ventas, productos y cajas'},
+        {'name': 'Audit', 'description': 'Logs de auditoria'},
+    ],
 }
 
 from datetime import timedelta
@@ -75,6 +100,9 @@ SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=2),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
     'AUTH_HEADER_TYPES': ('Bearer',),
+    'TOKEN_OBTAIN_SERIALIZER': 'apps.users.authentication.CustomTokenObtainPairSerializer',
+    'USER_ID_FIELD': 'uuid',
+    'USER_ID_CLAIM': 'user_id',
 }
 
 ROOT_URLCONF = 'config.urls'
@@ -104,7 +132,7 @@ import dj_database_url
 
 DATABASES = {
     'default': dj_database_url.config(
-        default='sqlite:///db.sqlite3',
+        default=os.getenv('DATABASE_URL', 'sqlite:///db.sqlite3'),
         conn_max_age=600,              
         conn_health_checks=True,       
     )
@@ -145,3 +173,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+AUTH_USER_MODEL = 'users.User'

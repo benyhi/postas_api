@@ -130,5 +130,128 @@ python manage.py test
 | `python manage.py collectstatic` | Recolectar archivos estáticos |
 | `python manage.py createsuperuser` | Crear usuario administrador |
 | `python manage.py test` | Ejecutar tests |
+| `python manage.py create_test_users` | Crear usuarios de prueba (ver abajo) |
+| `python manage.py seed_data` | Poblar la DB con datos ficticios |
+| `python manage.py reset_db` | Resetear la base de datos |
+
+---
+
+## 🧪 Scripts de prueba
+
+### Crear usuarios de prueba
+
+Crea un tenant de prueba con 4 usuarios (Owner, Admin, 2 Empleados):
+
+```bash
+python manage.py create_test_users
+```
+
+| Rol | Usuario | Contraseña |
+|-----|---------|------------|
+| OWNER | `owner` | `owner1234` |
+| ADMIN | `admin` | `admin1234` |
+| EMPLOYEE | `empleado1` | `empleado1234` |
+| EMPLOYEE | `empleado2` | `empleado1234` |
+
+**Tenant ID:** `00000000-0000-0000-0000-000000000001`
+
+Para usar un tenant distinto:
+
+```bash
+python manage.py create_test_users --tenant-id <uuid>
+```
+
+### Poblar la base de datos
+
+Genera datos realistas: 12 categorías, 98 productos (kiosko/almacén), cajas diarias, ventas con detalle y audit logs:
+
+```bash
+python manage.py seed_data
+```
+
+Opciones:
+
+```bash
+python manage.py seed_data --sales 200       # Cantidad de ventas (default: 150)
+python manage.py seed_data --days 60          # Distribuir en N días (default: 30)
+python manage.py seed_data --tenant-id <uuid> # Tenant específico
+```
+
+> ⚠️ Requiere que los usuarios de prueba existan. Ejecutar `create_test_users` primero.
+
+### Resetear la base de datos
+
+Borra todos los datos, re-aplica migraciones y opcionalmente re-pobla:
+
+```bash
+# Solo resetear
+python manage.py reset_db
+
+# Resetear + re-poblar con datos de prueba
+python manage.py reset_db --seed
+
+# Sin confirmación + custom sales
+python manage.py reset_db --seed --sales 200 --yes
+```
+
+### Ejemplo de login
+
+```bash
+curl -X POST http://localhost:8000/api/v1/auth/login/ \
+  -H "Content-Type: application/json" \
+  -d '{"tenant_id": "00000000-0000-0000-0000-000000000001", "username": "owner", "password": "owner1234"}'
+```
+
+---
+
+## 📖 Documentación de la API
+
+La API cuenta con documentación interactiva generada automáticamente con **drf-spectacular** (OpenAPI 3.0).
+
+| URL | Descripción |
+|-----|-------------|
+| `/api/docs/` | **Swagger UI** — Interfaz interactiva para probar endpoints |
+| `/api/redoc/` | **Redoc** — Documentación en formato legible |
+| `/api/schema/` | **Schema OpenAPI** — Especificación YAML descargable |
+
+### Endpoints documentados
+
+La documentación incluye **ejemplos de request/response**, **filtros** y **paginación** para todos los módulos:
+
+| Tag | Endpoints | Descripción |
+|-----|-----------|-------------|
+| **Auth** | `POST /api/v1/auth/login/`, `POST /api/v1/auth/token/refresh/` | Login con JWT (tenant_id + username + password) y refresh de token |
+| **Users** | `GET/POST /api/v1/users/`, `GET/PATCH/DELETE /api/v1/users/{uuid}/` | CRUD de usuarios (solo OWNER). DELETE es soft delete |
+| **Categories** | `GET/POST /api/v1/categories/`, `GET/PATCH/DELETE /api/v1/categories/{uuid}/` | CRUD de categorías (ADMIN/OWNER) |
+| **Products** | `GET/POST /api/v1/products/`, `GET/PATCH/DELETE /api/v1/products/{uuid}/`, `GET /api/v1/products/search/` | CRUD + búsqueda. Filtros: `category_id`, `low_stock` |
+| **Cashbox** | `POST /open/`, `POST /close/`, `GET /current/`, `GET /`, `GET /{uuid}/` | Apertura, cierre y consulta de cajas |
+| **Sales** | `GET/POST /api/v1/sales/`, `GET /{uuid}/`, `POST /{uuid}/cancel/` | Ventas con detalle. Filtros: `user_id`, `payment_method`, `from`, `to` |
+| **Reports** | `GET daily/`, `GET by-payment/`, `GET top-products/`, `GET cashbox-summary/` | Reportes con filtros de fechas y paginación |
+| **Audit** | `GET /api/v1/audit/` | Logs de auditoría. Filtros: `action`, `entity`, `user`, `timestamp` |
+
+### Paginación
+
+Todos los endpoints de listado usan **PageNumberPagination** con `PAGE_SIZE=20`:
+
+```
+GET /api/v1/products/?page=2
+```
+
+Respuesta:
+```json
+{
+  "count": 98,
+  "next": "http://localhost:8000/api/v1/products/?page=3",
+  "previous": "http://localhost:8000/api/v1/products/?page=1",
+  "results": [...]
+}
+```
+
+### Autenticación en Swagger UI
+
+1. Hacé login en `POST /api/v1/auth/login/` para obtener el token
+2. Clickeá el botón **Authorize** 🔒 en Swagger UI
+3. Ingresá: `Bearer <tu_access_token>`
+4. Todos los endpoints autenticados funcionarán
 
 ---

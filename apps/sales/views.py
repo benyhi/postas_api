@@ -1,3 +1,147 @@
-from django.shortcuts import render
+from decimal import Decimal
 
-# Create your views here.
+from django.db import transaction
+from rest_framework import generics, status
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiExample, OpenApiParameter
+
+from apps.sales.models import Sale, SaleDetail
+from apps.sales.serializers import SaleCreateSerializer, SaleReadSerializer
+from core.permissions.roles import IsAdminOrOwner
+from core.utils.audit import log_action
+
+
+@extend_schema_view(
+    list=extend_schema(
+        summary="Listar ventas",
+        description="Lista paginada de ventas. Soporta filtros por user_id, payment_method, from y to.",
+        tags=["Sales"],
+        parameters=[
+            OpenApiParameter(name="user_id", description="Filtrar por UUID del usuario vendedor", type=str, required=False),
+            OpenApiParameter(name="payment_method", description="Filtrar por metodo de pago (CASH, DEBIT, CREDIT, TRANSFER, QR)", type=str, required=False, enum=["CASH", "DEBIT", "CREDIT", "TRANSFER", "QR"]),
+            OpenApiParameter(name="from", description="Fecha desde (YYYY-MM-DD)", type=str, required=False),
+            OpenApiParameter(name="to", description="Fecha hasta (YYYY-MM-DD)", type=str, required=False),
+        ],
+    ),
+)
+class SaleListCreateView(generics.ListCreateAPIView):
+    def get_serializer_class(self):
+        if self.request.method == "POST":
+            return SaleCreateSerializer
+        return SaleReadSerializer
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return Sale.objects.none()
+        qs = Sale.objects.filter(tenant_id=self.request.tenant_id).select_related(
+            "user", "cashbox",
+        ).prefetch_related("details__product")
+
+        # Filters
+        user_id = self.request.query_params.get("user_id")
+        if user_id:
+            qs = qs.filter(user_id=user_id)
+
+        payment_method = self.request.query_params.get("payment_method")
+        if payment_method:
+            qs = qs.filter(payment_method=payment_method)
+
+        date_from = self.request.query_params.get("from")
+        if date_from:
+            qs = qs.filter(created_at__date__gte=date_from)
+
+        date_to = self.request.query_params.get("to")
+        if date_to:
+            qs = qs.filter(created_at__date__lte=date_to)
+
+        return qs
+
+    @extend_schema(
+        summary="Registrar venta",
+        description="Crea una nueva venta. Requiere una caja abierta. Valida stock y lo descuenta automaticamente.",
+        tags=["Sales"],
+        request=SaleCreateSerializer,
+        responses={201: SaleReadSerializer},
+        examples=[
+            OpenApiExample(
+                "Crear venta",
+                value={"payment_method": "CASH", "items": [{"product_id": "uuid-del-producto", "quantity": "2.000"}]},
+                request_only=True,
+            ),
+        ],
+    )
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        sale = serializer.save()
+        log_action(request, "SALE", "SALE", sale.uuid, {
+            "total": str(sale.total),
+            "payment_method": sale.payment_method,
+            "items_count": sale.details.count(),
+        })
+        read_serializer = SaleReadSerializer(sale)
+        return Response(read_serializer.data, status=status.HTTP_201_CREATED)
+
+
+@extend_schema_view(
+    retrieve=extend_schema(
+        summary="Detalle de venta",
+        description="Devuelve el detalle completo de una venta incluyendo sus items.",
+        tags=["Sales"],
+    ),
+)
+class SaleDetailView(generics.RetrieveAPIView):
+    serializer_class = SaleReadSerializer
+    lookup_field = "uuid"
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return Sale.objects.none()
+        return Sale.objects.filter(
+            tenant_id=self.request.tenant_id,
+        ).select_related("user", "cashbox").prefetch_related("details__product")
+
+
+class SaleCancelView(APIView):
+    permission_classes = [IsAdminOrOwner]
+
+    @extend_schema(
+        summary="Cancelar venta",
+        description="Cancela una venta y revierte el stock de los productos. Solo ADMIN u OWNER.",
+        tags=["Sales"],
+        request=None,
+        responses={200: SaleReadSerializer},
+    )
+    @transaction.atomic
+    def post(self, request, uuid):
+        try:
+            sale = Sale.objects.select_for_update().get(
+                uuid=uuid, tenant_id=request.tenant_id,
+            )
+        except Sale.DoesNotExist:
+            return Response(
+                {"detail": "Sale not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if sale.status == Sale.Status.CANCELLED:
+            return Response(
+                {"detail": "Sale is already cancelled."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Revert stock
+        for detail in sale.details.select_related("product"):
+            product = detail.product
+            product.stock += detail.quantity
+            product.save(update_fields=["stock"])
+
+        sale.status = Sale.Status.CANCELLED
+        sale.save(update_fields=["status"])
+
+        log_action(request, "SALE", "SALE", sale.uuid, {
+            "action": "CANCEL", "total": str(sale.total),
+        })
+
+        return Response(SaleReadSerializer(sale).data)

@@ -1,0 +1,1914 @@
+openapi: 3.0.3
+info:
+  title: POSTAS API
+  version: 1.0.0
+  description: API para sistema de punto de venta (POS) multi-tenant
+paths:
+  /api/v1/audit/:
+    get:
+      operationId: v1_audit_list
+      parameters:
+      - in: query
+        name: action
+        schema:
+          type: string
+          enum:
+          - CASHBOX
+          - CREATE
+          - DELETE
+          - LOGIN
+          - SALE
+          - UPDATE
+        description: |-
+          * `CREATE` - Create
+          * `UPDATE` - Update
+          * `DELETE` - Delete
+          * `LOGIN` - Login
+          * `SALE` - Sale
+          * `CASHBOX` - Cashbox
+      - in: query
+        name: entity
+        schema:
+          type: string
+          enum:
+          - CASHBOX
+          - CATEGORY
+          - PRODUCT
+          - SALE
+          - USER
+        description: |-
+          * `USER` - User
+          * `PRODUCT` - Product
+          * `CATEGORY` - Category
+          * `SALE` - Sale
+          * `CASHBOX` - Cashbox
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - in: query
+        name: timestamp__date
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: timestamp__gte
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: timestamp__lte
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: user
+        schema:
+          type: string
+          format: uuid
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAuditLogList'
+          description: ''
+  /api/v1/auth/login/:
+    post:
+      operationId: v1_auth_login_create
+      description: Autentica un usuario con tenant_id, username y password. Devuelve
+        tokens JWT con claims de tenant_id, role y user_id.
+      summary: Login
+      tags:
+      - Auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomTokenObtainPairRequest'
+            examples:
+              LoginExitoso:
+                value:
+                  tenant_id: 00000000-0000-0000-0000-000000000001
+                  username: owner
+                  password: owner1234
+                summary: Login exitoso
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CustomTokenObtainPairRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CustomTokenObtainPairRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+              examples:
+                RespuestaExitosa:
+                  value:
+                    refresh: eyJhbGciOiJIUzI1NiIs...
+                    access: eyJhbGciOiJIUzI1NiIs...
+                  summary: Respuesta exitosa
+          description: ''
+  /api/v1/auth/token/refresh/:
+    post:
+      operationId: v1_auth_token_refresh_create
+      description: Obtiene un nuevo access token usando el refresh token.
+      summary: Refrescar token
+      tags:
+      - Auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenRefresh'
+          description: ''
+  /api/v1/cashboxes/:
+    get:
+      operationId: v1_cashboxes_list
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedCashboxReadList'
+          description: ''
+  /api/v1/cashboxes/{uuid}/:
+    get:
+      operationId: v1_cashboxes_retrieve
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashboxRead'
+          description: ''
+  /api/v1/cashboxes/close/:
+    post:
+      operationId: v1_cashboxes_close_create
+      description: Cierra la caja abierta del tenant. Calcula expected_amount y difference
+        automaticamente.
+      summary: Cerrar caja
+      tags:
+      - Cashbox
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CashboxCloseRequest'
+            examples:
+              CerrarCaja:
+                value:
+                  final_amount: '12500.00'
+                summary: Cerrar caja
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CashboxCloseRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CashboxCloseRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashboxRead'
+          description: ''
+  /api/v1/cashboxes/current/:
+    get:
+      operationId: v1_cashboxes_current_retrieve
+      description: Devuelve la caja abierta actualmente para el tenant.
+      summary: Caja actual
+      tags:
+      - Cashbox
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashboxRead'
+          description: ''
+  /api/v1/cashboxes/open/:
+    post:
+      operationId: v1_cashboxes_open_create
+      description: Abre una nueva caja con un monto inicial. Solo se permite una caja
+        abierta por tenant.
+      summary: Abrir caja
+      tags:
+      - Cashbox
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CashboxOpenRequest'
+            examples:
+              AbrirCaja:
+                value:
+                  initial_amount: '5000.00'
+                summary: Abrir caja
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CashboxOpenRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CashboxOpenRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashboxRead'
+          description: ''
+  /api/v1/categories/:
+    get:
+      operationId: v1_categories_list
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedCategoryList'
+          description: ''
+    post:
+      operationId: v1_categories_create
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CategoryRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CategoryRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+          description: ''
+  /api/v1/categories/{uuid}/:
+    get:
+      operationId: v1_categories_retrieve
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+          description: ''
+    put:
+      operationId: v1_categories_update
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CategoryRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CategoryRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+          description: ''
+    patch:
+      operationId: v1_categories_partial_update
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedCategoryRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedCategoryRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedCategoryRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+          description: ''
+    delete:
+      operationId: v1_categories_destroy
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/products/:
+    get:
+      operationId: v1_products_list
+      parameters:
+      - in: query
+        name: category
+        schema:
+          type: string
+          format: uuid
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedProductList'
+          description: ''
+    post:
+      operationId: v1_products_create
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ProductRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ProductRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+          description: ''
+  /api/v1/products/{uuid}/:
+    get:
+      operationId: v1_products_retrieve
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+          description: ''
+    put:
+      operationId: v1_products_update
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ProductRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ProductRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+          description: ''
+    patch:
+      operationId: v1_products_partial_update
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedProductRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedProductRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedProductRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+          description: ''
+    delete:
+      operationId: v1_products_destroy
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/products/search/:
+    get:
+      operationId: v1_products_search_list
+      description: 'Busca productos por nombre o codigo de barras. Parametro: ?q=texto'
+      summary: Buscar productos
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - in: query
+        name: q
+        schema:
+          type: string
+        description: Texto a buscar en nombre o barcode
+      tags:
+      - Products
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedProductList'
+          description: ''
+  /api/v1/reports/cashbox/summary/:
+    get:
+      operationId: v1_reports_cashbox_summary_retrieve
+      description: Resumen de una caja especifica o la caja abierta actual. Incluye
+        desglose por metodo de pago.
+      summary: Resumen de caja
+      parameters:
+      - in: query
+        name: cashbox_id
+        schema:
+          type: string
+        description: UUID de la caja. Si no se envia, usa la caja abierta.
+      tags:
+      - Reports
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashboxSummaryReport'
+          description: ''
+  /api/v1/reports/products/top/:
+    get:
+      operationId: v1_reports_products_top_list
+      description: Top N productos por cantidad vendida. Filtra por rango de fechas
+        y limite.
+      summary: Productos mas vendidos
+      parameters:
+      - in: query
+        name: from
+        schema:
+          type: string
+        description: 'Fecha desde (YYYY-MM-DD). Por defecto: hoy.'
+      - in: query
+        name: limit
+        schema:
+          type: integer
+        description: 'Cantidad maxima de productos (default: 10)'
+      - in: query
+        name: to
+        schema:
+          type: string
+        description: Fecha hasta (YYYY-MM-DD)
+      tags:
+      - Reports
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TopProductsReport'
+              examples:
+                Respuesta:
+                  value:
+                  - - product__uuid: uuid
+                      product__name: Coca Cola 500ml
+                      total_quantity: 45.0
+                      total_revenue: 67500.0
+          description: ''
+  /api/v1/reports/sales/by-payment/:
+    get:
+      operationId: v1_reports_sales_by_payment_list
+      description: Desglose de ventas agrupadas por metodo de pago. Filtra por rango
+        de fechas.
+      summary: Ventas por metodo de pago
+      parameters:
+      - in: query
+        name: from
+        schema:
+          type: string
+        description: 'Fecha desde (YYYY-MM-DD). Por defecto: hoy.'
+      - in: query
+        name: to
+        schema:
+          type: string
+        description: Fecha hasta (YYYY-MM-DD)
+      tags:
+      - Reports
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SalesByPaymentReport'
+              examples:
+                Respuesta:
+                  value:
+                  - - payment_method: CASH
+                      total: 15000.0
+                      count: 8
+                    - payment_method: DEBIT
+                      total: 10000.0
+                      count: 4
+          description: ''
+  /api/v1/reports/sales/daily/:
+    get:
+      operationId: v1_reports_sales_daily_retrieve
+      description: Retorna total vendido, cantidad de ventas y promedio. Filtra por
+        rango de fechas (from/to). Sin fechas, muestra solo hoy.
+      summary: Reporte de ventas diarias
+      parameters:
+      - in: query
+        name: from
+        schema:
+          type: string
+        description: 'Fecha desde (YYYY-MM-DD). Por defecto: hoy.'
+      - in: query
+        name: to
+        schema:
+          type: string
+        description: Fecha hasta (YYYY-MM-DD)
+      tags:
+      - Reports
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailySalesReport'
+              examples:
+                Respuesta:
+                  value:
+                    total_sold: 25000.0
+                    sale_count: 12
+                    average_sale: 2083.33
+          description: ''
+  /api/v1/sales/:
+    get:
+      operationId: v1_sales_list
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSaleReadList'
+          description: ''
+    post:
+      operationId: v1_sales_create
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaleCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SaleCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SaleCreateRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaleCreate'
+          description: ''
+  /api/v1/sales/{uuid}/:
+    get:
+      operationId: v1_sales_retrieve
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaleRead'
+          description: ''
+  /api/v1/sales/{uuid}/cancel/:
+    post:
+      operationId: v1_sales_cancel_create
+      description: Cancela una venta y revierte el stock de los productos. Solo ADMIN
+        u OWNER.
+      summary: Cancelar venta
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Sales
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaleRead'
+          description: ''
+  /api/v1/users/:
+    get:
+      operationId: v1_users_list
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedUserReadList'
+          description: ''
+    post:
+      operationId: v1_users_create
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/UserRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/UserRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+  /api/v1/users/{uuid}/:
+    get:
+      operationId: v1_users_retrieve
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRead'
+          description: ''
+    put:
+      operationId: v1_users_update
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/UserRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/UserRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+    patch:
+      operationId: v1_users_partial_update
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedUserRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedUserRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedUserRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+    delete:
+      operationId: v1_users_destroy
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+components:
+  schemas:
+    ActionEnum:
+      enum:
+      - CREATE
+      - UPDATE
+      - DELETE
+      - LOGIN
+      - SALE
+      - CASHBOX
+      type: string
+      description: |-
+        * `CREATE` - Create
+        * `UPDATE` - Update
+        * `DELETE` - Delete
+        * `LOGIN` - Login
+        * `SALE` - Sale
+        * `CASHBOX` - Cashbox
+    AuditLog:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+          readOnly: true
+        tenant_id:
+          type: string
+          format: uuid
+        user:
+          type: string
+          format: uuid
+          nullable: true
+        user_username:
+          type: string
+          readOnly: true
+        action:
+          $ref: '#/components/schemas/ActionEnum'
+        entity:
+          $ref: '#/components/schemas/EntityEnum'
+        entity_id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+          readOnly: true
+        metadata: {}
+      required:
+      - action
+      - entity
+      - entity_id
+      - tenant_id
+      - timestamp
+      - user_username
+      - uuid
+    CashboxCloseRequest:
+      type: object
+      properties:
+        final_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+      required:
+      - final_amount
+    CashboxOpenRequest:
+      type: object
+      properties:
+        initial_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+      required:
+      - initial_amount
+    CashboxRead:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+          readOnly: true
+        tenant_id:
+          type: string
+          format: uuid
+        opened_by:
+          type: string
+          format: uuid
+        opened_by_username:
+          type: string
+          readOnly: true
+        closed_by:
+          type: string
+          format: uuid
+          nullable: true
+        closed_by_username:
+          type: string
+          readOnly: true
+        opened_at:
+          type: string
+          format: date-time
+          readOnly: true
+        closed_at:
+          type: string
+          format: date-time
+          nullable: true
+        initial_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        final_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          nullable: true
+        expected_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          nullable: true
+        difference:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          nullable: true
+        status:
+          $ref: '#/components/schemas/CashboxReadStatusEnum'
+      required:
+      - closed_by_username
+      - initial_amount
+      - opened_at
+      - opened_by
+      - opened_by_username
+      - tenant_id
+      - uuid
+    CashboxReadStatusEnum:
+      enum:
+      - OPEN
+      - CLOSED
+      type: string
+      description: |-
+        * `OPEN` - Open
+        * `CLOSED` - Closed
+    CashboxSummaryReport:
+      type: object
+      properties:
+        cashbox_uuid:
+          type: string
+          format: uuid
+        status:
+          type: string
+        opened_at:
+          type: string
+          format: date-time
+        closed_at:
+          type: string
+          format: date-time
+          nullable: true
+        initial_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        final_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          nullable: true
+        expected_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          nullable: true
+        difference:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          nullable: true
+        total_sold:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        sale_count:
+          type: integer
+        by_payment_method:
+          type: array
+          items: {}
+      required:
+      - by_payment_method
+      - cashbox_uuid
+      - closed_at
+      - difference
+      - expected_amount
+      - final_amount
+      - initial_amount
+      - opened_at
+      - sale_count
+      - status
+      - total_sold
+    Category:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+          readOnly: true
+        tenant_id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          maxLength: 100
+        active:
+          type: boolean
+          default: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - name
+      - tenant_id
+      - updated_at
+      - uuid
+    CategoryRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        active:
+          type: boolean
+          default: true
+      required:
+      - name
+    CustomTokenObtainPairRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          writeOnly: true
+          minLength: 1
+        tenant_id:
+          type: string
+          format: uuid
+          writeOnly: true
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - password
+      - tenant_id
+      - username
+    DailySalesReport:
+      type: object
+      properties:
+        total_sold:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        sale_count:
+          type: integer
+        average_sale:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+      required:
+      - average_sale
+      - sale_count
+      - total_sold
+    EntityEnum:
+      enum:
+      - USER
+      - PRODUCT
+      - CATEGORY
+      - SALE
+      - CASHBOX
+      type: string
+      description: |-
+        * `USER` - User
+        * `PRODUCT` - Product
+        * `CATEGORY` - Category
+        * `SALE` - Sale
+        * `CASHBOX` - Cashbox
+    PaginatedAuditLogList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditLog'
+    PaginatedCashboxReadList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/CashboxRead'
+    PaginatedCategoryList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+    PaginatedProductList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Product'
+    PaginatedSaleReadList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SaleRead'
+    PaginatedUserReadList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserRead'
+    PatchedCategoryRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        active:
+          type: boolean
+          default: true
+    PatchedProductRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+        price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        cost:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        unit:
+          $ref: '#/components/schemas/UnitEnum'
+        stock:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+        min_stock:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+        barcode:
+          type: string
+          default: ''
+          maxLength: 100
+        category_id:
+          type: string
+          format: uuid
+          writeOnly: true
+          nullable: true
+        active:
+          type: boolean
+          default: true
+    PatchedUserRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          minLength: 1
+          maxLength: 254
+        password:
+          type: string
+          writeOnly: true
+          minLength: 8
+        role:
+          $ref: '#/components/schemas/RoleEnum'
+        active:
+          type: boolean
+    PaymentMethodEnum:
+      enum:
+      - CASH
+      - CARD
+      - TRANSFER
+      type: string
+      description: |-
+        * `CASH` - Cash
+        * `CARD` - Card
+        * `TRANSFER` - Transfer
+    Product:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+          readOnly: true
+        tenant_id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          maxLength: 200
+        description:
+          type: string
+        price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        cost:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        unit:
+          $ref: '#/components/schemas/UnitEnum'
+        stock:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+        min_stock:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+        barcode:
+          type: string
+          default: ''
+          maxLength: 100
+        category:
+          allOf:
+          - $ref: '#/components/schemas/Category'
+          readOnly: true
+        active:
+          type: boolean
+          default: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - category
+      - created_at
+      - name
+      - price
+      - tenant_id
+      - updated_at
+      - uuid
+    ProductRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+        price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        cost:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        unit:
+          $ref: '#/components/schemas/UnitEnum'
+        stock:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+        min_stock:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+        barcode:
+          type: string
+          default: ''
+          maxLength: 100
+        category_id:
+          type: string
+          format: uuid
+          writeOnly: true
+          nullable: true
+        active:
+          type: boolean
+          default: true
+      required:
+      - name
+      - price
+    RoleEnum:
+      enum:
+      - OWNER
+      - ADMIN
+      - EMPLOYEE
+      type: string
+      description: |-
+        * `OWNER` - Owner
+        * `ADMIN` - Admin
+        * `EMPLOYEE` - Employee
+    SaleCreate:
+      type: object
+      properties:
+        payment_method:
+          $ref: '#/components/schemas/PaymentMethodEnum'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SaleDetailWrite'
+      required:
+      - items
+      - payment_method
+    SaleCreateRequest:
+      type: object
+      properties:
+        payment_method:
+          $ref: '#/components/schemas/PaymentMethodEnum'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SaleDetailWriteRequest'
+      required:
+      - items
+      - payment_method
+    SaleDetailRead:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+          readOnly: true
+        product:
+          type: string
+          format: uuid
+        product_name:
+          type: string
+          readOnly: true
+        quantity:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+        price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        subtotal:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+      required:
+      - price
+      - product
+      - product_name
+      - quantity
+      - subtotal
+      - uuid
+    SaleDetailWrite:
+      type: object
+      properties:
+        product_id:
+          type: string
+          format: uuid
+        quantity:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+      required:
+      - product_id
+      - quantity
+    SaleDetailWriteRequest:
+      type: object
+      properties:
+        product_id:
+          type: string
+          format: uuid
+        quantity:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+      required:
+      - product_id
+      - quantity
+    SaleRead:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+          readOnly: true
+        tenant_id:
+          type: string
+          format: uuid
+        user:
+          type: string
+          format: uuid
+        user_username:
+          type: string
+          readOnly: true
+        cashbox:
+          type: string
+          format: uuid
+        total:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        payment_method:
+          $ref: '#/components/schemas/PaymentMethodEnum'
+        status:
+          $ref: '#/components/schemas/SaleReadStatusEnum'
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/SaleDetailRead'
+          readOnly: true
+      required:
+      - cashbox
+      - created_at
+      - details
+      - payment_method
+      - tenant_id
+      - total
+      - user
+      - user_username
+      - uuid
+    SaleReadStatusEnum:
+      enum:
+      - COMPLETED
+      - CANCELLED
+      type: string
+      description: |-
+        * `COMPLETED` - Completed
+        * `CANCELLED` - Cancelled
+    SalesByPaymentReport:
+      type: object
+      properties:
+        payment_method:
+          type: string
+        total:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        count:
+          type: integer
+      required:
+      - count
+      - payment_method
+      - total
+    TokenRefresh:
+      type: object
+      properties:
+        access:
+          type: string
+          readOnly: true
+      required:
+      - access
+    TokenRefreshRequest:
+      type: object
+      properties:
+        refresh:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - refresh
+    TokenResponse:
+      type: object
+      properties:
+        refresh:
+          type: string
+        access:
+          type: string
+      required:
+      - access
+      - refresh
+    TopProductsReport:
+      type: object
+      properties:
+        product__uuid:
+          type: string
+          format: uuid
+        product__name:
+          type: string
+        total_quantity:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+        total_revenue:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+      required:
+      - product__name
+      - product__uuid
+      - total_quantity
+      - total_revenue
+    UnitEnum:
+      enum:
+      - KG
+      - U
+      type: string
+      description: |-
+        * `KG` - Kilogram
+        * `U` - Unit
+    User:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+          readOnly: true
+        tenant_id:
+          type: string
+          format: uuid
+          readOnly: true
+        username:
+          type: string
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        role:
+          $ref: '#/components/schemas/RoleEnum'
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - email
+      - tenant_id
+      - updated_at
+      - username
+      - uuid
+    UserRead:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+          readOnly: true
+        username:
+          type: string
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        role:
+          $ref: '#/components/schemas/RoleEnum'
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - email
+      - updated_at
+      - username
+      - uuid
+    UserRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          minLength: 1
+          maxLength: 254
+        password:
+          type: string
+          writeOnly: true
+          minLength: 8
+        role:
+          $ref: '#/components/schemas/RoleEnum'
+        active:
+          type: boolean
+      required:
+      - email
+      - password
+      - username
+  securitySchemes:
+    jwtAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+tags:
+- name: Auth
+  description: Login y refresh de tokens JWT
+- name: Users
+  description: CRUD de usuarios (solo OWNER)
+- name: Categories
+  description: CRUD de categorias de productos
+- name: Products
+  description: CRUD de productos y busqueda
+- name: Cashbox
+  description: Apertura, cierre y consulta de cajas
+- name: Sales
+  description: Registro, consulta y anulacion de ventas
+- name: Reports
+  description: Reportes de ventas, productos y cajas
+- name: Audit
+  description: Logs de auditoria
