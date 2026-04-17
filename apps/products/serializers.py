@@ -21,6 +21,7 @@ class CategorySerializer(serializers.ModelSerializer):
 class ProductSerializer(serializers.ModelSerializer):
     category_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
     category = CategorySerializer(read_only=True)
+    current_suppliers = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -28,7 +29,13 @@ class ProductSerializer(serializers.ModelSerializer):
             "uuid", "tenant_id", "name", "description",
             "price", "cost", "unit", "stock", "min_stock",
             "barcode", "category", "category_id", "active",
-            "created_at", "updated_at",
+            "current_suppliers", "created_at", "updated_at",
+        ]
+
+    def get_current_suppliers(self, obj):
+        return [
+            {"uuid": str(s.uuid), "name": s.name}
+            for s in obj.current_suppliers
         ]
         read_only_fields = ["uuid", "tenant_id", "created_at", "updated_at"]
 

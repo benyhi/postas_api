@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'apps.cashbox',
     'apps.reports',
     'apps.audit',
+    'apps.suppliers',
 ]
 
 MIDDLEWARE = [
@@ -91,6 +92,7 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Sales', 'description': 'Registro, consulta y anulacion de ventas'},
         {'name': 'Reports', 'description': 'Reportes de ventas, productos y cajas'},
         {'name': 'Audit', 'description': 'Logs de auditoria'},
+        {'name': 'Suppliers', 'description': 'CRUD de proveedores y relaciones producto-proveedor'},
     ],
 }
 

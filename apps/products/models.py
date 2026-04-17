@@ -78,5 +78,13 @@ class Product(TenantModel):
             ),
         ]
 
+    @property
+    def current_suppliers(self):
+        from apps.suppliers.models import Supplier
+        return Supplier.objects.filter(
+            product_suppliers__product=self,
+            product_suppliers__is_current=True,
+        )
+
     def __str__(self):
         return self.name

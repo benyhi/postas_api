@@ -20,6 +20,7 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, Sp
 
 from apps.users.urls import auth_urlpatterns, users_urlpatterns
 from apps.products.urls import products_urlpatterns, categories_urlpatterns
+from apps.suppliers.urls import suppliers_urlpatterns, product_suppliers_urlpatterns
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -50,4 +51,8 @@ urlpatterns = [
 
     # Audit
     path('api/v1/audit/', include('apps.audit.urls')),
+
+    # Suppliers
+    path('api/v1/suppliers/', include(suppliers_urlpatterns)),
+    path('api/v1/product-suppliers/', include(product_suppliers_urlpatterns)),
 ]

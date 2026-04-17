@@ -110,6 +110,7 @@ python manage.py test
    /cashbox
    /reports
    /audit
+   /suppliers
 /core
    /middleware
    /permissions
@@ -228,6 +229,9 @@ La documentación incluye **ejemplos de request/response**, **filtros** y **pagi
 | **Sales** | `GET/POST /api/v1/sales/`, `GET /{uuid}/`, `POST /{uuid}/cancel/` | Ventas con detalle. Filtros: `user_id`, `payment_method`, `from`, `to` |
 | **Reports** | `GET daily/`, `GET by-payment/`, `GET top-products/`, `GET cashbox-summary/` | Reportes con filtros de fechas y paginación |
 | **Audit** | `GET /api/v1/audit/` | Logs de auditoría. Filtros: `action`, `entity`, `user`, `timestamp` |
+| **Suppliers** | `GET/POST /api/v1/suppliers/`, `GET/PATCH/DELETE /api/v1/suppliers/{uuid}/` | CRUD de proveedores (ADMIN/OWNER). DELETE es soft delete |
+| **Suppliers** | `GET/POST /api/v1/product-suppliers/`, `GET/PATCH/DELETE /api/v1/product-suppliers/{uuid}/` | Historial de relaciones producto-proveedor. Filtros: `product`, `is_current` |
+| **Suppliers** | `POST /api/v1/product-suppliers/switch/` | Cambia el proveedor activo de un producto (desactiva los anteriores) |
 
 ### Paginación
 
@@ -253,5 +257,69 @@ Respuesta:
 2. Clickeá el botón **Authorize** 🔒 en Swagger UI
 3. Ingresá: `Bearer <tu_access_token>`
 4. Todos los endpoints autenticados funcionarán
+
+---
+
+## 🏪 Módulo de Proveedores
+
+Permite gestionar proveedores y asociarlos a productos con historial de precios.
+
+### Modelos
+
+**`Supplier`** — Proveedor del tenant.
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `uuid` | UUID (PK) | Identificador único |
+| `tenant_id` | UUID | Tenant al que pertenece |
+| `name` | CharField | Nombre del proveedor |
+| `phone` | CharField | Teléfono (opcional) |
+| `email` | EmailField | Email (opcional) |
+| `address` | CharField | Dirección (opcional) |
+| `notes` | TextField | Notas internas (opcional) |
+| `active` | BooleanField | Soft delete |
+
+**`ProductSupplier`** — Relación histórica entre producto y proveedor.
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `uuid` | UUID (PK) | Identificador único |
+| `product` | FK → Product | Producto relacionado |
+| `supplier` | FK → Supplier | Proveedor relacionado |
+| `price` | Decimal | Precio de compra al proveedor (opcional) |
+| `is_current` | BooleanField | Si es la relación activa actualmente |
+| `since` | DateField | Fecha de inicio (auto) |
+| `until` | DateField | Fecha de fin (se llena al desactivar) |
+
+> No se elimina el historial: al cambiar de proveedor se setea `is_current=False` y `until=hoy`, y se crea un nuevo registro.
+
+### Relación con Product
+
+Cada `Product` expone una property `current_suppliers` y el serializer incluye el campo `current_suppliers` con la lista de proveedores activos:
+
+```json
+{
+  "uuid": "...",
+  "name": "Coca Cola 500ml",
+  "current_suppliers": [
+    { "uuid": "...", "name": "Distribuidora Norte" }
+  ]
+}
+```
+
+### Cambiar proveedor activo
+
+```bash
+POST /api/v1/product-suppliers/switch/
+Authorization: Bearer <token>
+
+{
+  "product_uuid": "<uuid-del-producto>",
+  "supplier_uuid": "<uuid-del-nuevo-proveedor>",
+  "price": "850.00"
+}
+```
+
+Desactiva todos los proveedores activos del producto y asigna el nuevo. La lógica vive en `apps/suppliers/services.py`.
 
 ---
