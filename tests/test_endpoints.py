@@ -250,4 +250,3 @@ if errors:
         print(f"    - {e}")
 
 sys.exit(0 if failed == 0 else 1)
-

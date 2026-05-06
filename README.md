@@ -116,6 +116,7 @@ python manage.py test
    /permissions
    /models
    /utils
+   /cloud
 /manage.py
 ```
 
@@ -232,6 +233,9 @@ La documentación incluye **ejemplos de request/response**, **filtros** y **pagi
 | **Suppliers** | `GET/POST /api/v1/suppliers/`, `GET/PATCH/DELETE /api/v1/suppliers/{uuid}/` | CRUD de proveedores (ADMIN/OWNER). DELETE es soft delete |
 | **Suppliers** | `GET/POST /api/v1/product-suppliers/`, `GET/PATCH/DELETE /api/v1/product-suppliers/{uuid}/` | Historial de relaciones producto-proveedor. Filtros: `product`, `is_current` |
 | **Suppliers** | `POST /api/v1/product-suppliers/switch/` | Cambia el proveedor activo de un producto (desactiva los anteriores) |
+| **Cloud** | `GET/POST/DELETE /api/v1/cloud/images/`, `GET/PUT /api/v1/cloud/images/{key}/` | CRUD de imágenes (autenticado, cualquier rol) |
+| **Cloud** | `GET /api/v1/cloud/public/images/`, `GET /api/v1/cloud/public/images/{key}/` | Lectura pública de imágenes (sin autenticación) |
+| **Cloud** | `GET /api/v1/cloud/health/` | Health check del bucket R2 (ADMIN/OWNER) |
 
 ### Paginación
 
@@ -321,5 +325,245 @@ Authorization: Bearer <token>
 ```
 
 Desactiva todos los proveedores activos del producto y asigna el nuevo. La lógica vive en `apps/suppliers/services.py`.
+
+---
+
+## ☁️ Módulo de Imágenes (Cloudflare R2)
+
+Permite subir, actualizar, obtener y eliminar imágenes desde un bucket de Cloudflare R2 (compatible con S3).
+
+### Configuración del backend
+
+Agregá las siguientes variables al `.env`:
+
+```env
+R2_BUCKET_NAME=nombre-de-tu-bucket
+R2_ACCESS_KEY_ID=tu-access-key-id
+R2_SECRET_ACCESS_KEY=tu-secret-access-key
+R2_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com
+R2_PUBLIC_URL=https://pub-<hash>.r2.dev
+R2_REGION=auto
+```
+
+> `R2_PUBLIC_URL` es la URL pública del bucket (dominio personalizado o la URL `pub-*.r2.dev` que provee Cloudflare). Es el prefijo que se antepone a cada `key` para armar la URL final de la imagen.
+
+Instalá la dependencia si no la tenés:
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+### Endpoints — Frontend
+
+#### Organización por tenant
+
+Todas las imágenes se almacenan bajo el prefijo `<tenant_id>/` dentro del bucket, de modo que cada tenant tiene su propio espacio aislado:
+
+```
+bucket/
+  00000000-0000-0000-0000-000000000001/
+    images/
+      20250506_130000_foto.jpg
+    banners/
+      20250506_140000_banner.png
+  otro-tenant-uuid/
+    images/
+      ...
+```
+
+Los endpoints autenticados aplican esto de forma automática. El `key` que devuelve la API ya incluye el `tenant_id` como prefijo, por ejemplo: `00000000-0000-0000-0000-000000000001/images/20250506_130000_foto.jpg`.
+
+---
+
+#### Endpoints públicos (sin autenticación)
+
+> Usar estos para mostrar imágenes en el panel de administración sin necesidad de token.
+
+**Listar imágenes**
+
+```
+GET /api/v1/cloud/public/images/?tenant_id=<uuid>
+```
+
+Query params:
+
+| Param | Requerido | Default | Descripción |
+|-------|-----------|---------|-------------|
+| `tenant_id` | ✅ | — | UUID del tenant |
+| `prefix` | ❌ | — | Subcarpeta dentro del tenant (ej: `images/`) |
+| `search` | ❌ | — | Filtra por nombre de archivo |
+| `max_keys` | ❌ | `200` | Máx. imágenes a devolver (tope: 1000) |
+| `token` | ❌ | — | Token de paginación para la siguiente página |
+
+Respuesta:
+
+```json
+{
+  "images": [
+    {
+      "key": "00000000-0000-0000-0000-000000000001/images/20250506_123000_foto.jpg",
+      "url": "https://pub-xxx.r2.dev/00000000-0000-0000-0000-000000000001/images/20250506_123000_foto.jpg",
+      "size": 84320,
+      "last_modified": "2025-05-06T12:30:00+00:00",
+      "filename": "20250506_123000_foto.jpg"
+    }
+  ],
+  "count": 1,
+  "is_truncated": false,
+  "next_token": null
+}
+```
+
+**Obtener una imagen específica**
+
+```
+GET /api/v1/cloud/public/images/<key>/
+```
+
+Ejemplo:
+
+```
+GET /api/v1/cloud/public/images/00000000-0000-0000-0000-000000000001/images/20250506_123000_foto.jpg/
+```
+
+Respuesta:
+
+```json
+{
+  "success": true,
+  "key": "00000000-0000-0000-0000-000000000001/images/20250506_123000_foto.jpg",
+  "url": "https://pub-xxx.r2.dev/00000000-0000-0000-0000-000000000001/images/20250506_123000_foto.jpg"
+}
+```
+
+---
+
+#### Endpoints autenticados (requieren JWT)
+
+> Cualquier usuario logueado (EMPLOYEE, ADMIN u OWNER) puede operar.
+
+Todos los requests autenticados requieren el header:
+
+```
+Authorization: Bearer <access_token>
+```
+
+**Listar imágenes**
+
+```
+GET /api/v1/cloud/images/
+```
+
+Mismos query params que el endpoint público, excepto que `tenant_id` no es necesario (se toma del token automáticamente). El parámetro `prefix` es relativo al tenant (ej: `prefix=images/` lista `<tenant_id>/images/`).
+
+**Subir imagen**
+
+```
+POST /api/v1/cloud/images/
+Content-Type: multipart/form-data
+```
+
+| Campo | Requerido | Descripción |
+|-------|-----------|-------------|
+| `image` | ✅ | Archivo de imagen (`.jpg`, `.jpeg`, `.png`, `.webp`) |
+| `folder` | ❌ | Carpeta destino dentro del bucket (default: `images`) |
+
+Respuesta `201`:
+
+```json
+{
+  "success": true,
+  "key": "00000000-0000-0000-0000-000000000001/images/20250506_130000_foto.jpg",
+  "url": "https://pub-xxx.r2.dev/00000000-0000-0000-0000-000000000001/images/20250506_130000_foto.jpg"
+}
+```
+
+**Obtener metadata de una imagen**
+
+```
+GET /api/v1/cloud/images/<key>/
+```
+
+**Reemplazar una imagen** (elimina la anterior y sube la nueva)
+
+```
+PUT /api/v1/cloud/images/<key>/
+Content-Type: multipart/form-data
+```
+
+| Campo | Requerido | Descripción |
+|-------|-----------|-------------|
+| `image` | ✅ | Nuevo archivo |
+| `folder` | ❌ | Carpeta destino (default: la misma carpeta del `key` original) |
+
+Respuesta:
+
+```json
+{
+  "success": true,
+  "key": "00000000-0000-0000-0000-000000000001/images/20250506_140000_foto_nueva.jpg",
+  "url": "https://pub-xxx.r2.dev/00000000-0000-0000-0000-000000000001/images/20250506_140000_foto_nueva.jpg"
+}
+```
+
+**Eliminar imagen**
+
+```
+DELETE /api/v1/cloud/images/
+```
+
+Body JSON:
+
+```json
+{ "key": "00000000-0000-0000-0000-000000000001/images/20250506_123000_foto.jpg" }
+```
+
+O como query param:
+
+```
+DELETE /api/v1/cloud/images/?key=00000000-0000-0000-0000-000000000001/images/20250506_123000_foto.jpg
+```
+
+Respuesta:
+
+```json
+{ "deleted": "images/20250506_123000_foto.jpg" }
+```
+
+---
+
+#### Health check (ADMIN / OWNER)
+
+Prueba la conectividad con el bucket haciendo un ciclo upload → read → delete sobre un archivo de prueba.
+
+```
+GET /api/v1/cloud/health/
+Authorization: Bearer <token>
+```
+
+Respuesta:
+
+```json
+{
+  "ok": true,
+  "steps": [
+    { "step": "connect", "ok": true, "ms": 12, "bucket": "mi-bucket" },
+    { "step": "upload",  "ok": true, "ms": 230 },
+    { "step": "read",    "ok": true, "ms": 180 },
+    { "step": "delete",  "ok": true, "ms": 150 }
+  ]
+}
+```
+
+---
+
+### Notas para el frontend
+
+- La `url` que devuelve cada endpoint ya es pública y se puede usar directamente en un `<img src="...">`.
+- El campo `key` es el identificador interno del archivo en el bucket. Guardarlo si después se necesita actualizar o eliminar la imagen.
+- Las extensiones permitidas son: `.jpg`, `.jpeg`, `.png`, `.webp`.
+- Tamaño máximo por defecto: **5 MB**.
 
 ---

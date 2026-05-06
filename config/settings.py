@@ -16,6 +16,20 @@ import os
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Carga el .env en os.environ (solo vars que no estén ya definidas en el proceso)
+_env_file = BASE_DIR / '.env'
+if _env_file.exists():
+    with open(_env_file) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if not _line or _line.startswith('#') or '=' not in _line:
+                continue
+            _k, _, _v = _line.partition('=')
+            _k = _k.strip()
+            _v = _v.split('#')[0].strip()
+            if _k and _k not in os.environ:
+                os.environ[_k] = _v
+
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
@@ -179,3 +193,13 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AUTH_USER_MODEL = 'users.User'
+
+# Cloudflare R2 / S3
+R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "")
+R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "")
+R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "")
+R2_REGION = os.getenv("R2_REGION", "auto")
+R2_ENDPOINT_URL = os.getenv("R2_ENDPOINT_URL", "")
+R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL", "")
+R2_ALLOWED_EXTENSIONS = tuple(os.getenv("R2_ALLOWED_EXTENSIONS", ".jpg,.jpeg,.png,.webp").split(","))
+R2_MAX_IMAGE_SIZE = int(os.getenv("R2_MAX_IMAGE_SIZE", str(5 * 1024 * 1024)))

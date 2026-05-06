@@ -21,6 +21,7 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, Sp
 from apps.users.urls import auth_urlpatterns, users_urlpatterns
 from apps.products.urls import products_urlpatterns, categories_urlpatterns
 from apps.suppliers.urls import suppliers_urlpatterns, product_suppliers_urlpatterns
+from core.cloud.urls import cloud_urlpatterns
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -55,4 +56,7 @@ urlpatterns = [
     # Suppliers
     path('api/v1/suppliers/', include(suppliers_urlpatterns)),
     path('api/v1/product-suppliers/', include(product_suppliers_urlpatterns)),
+
+    # Cloud / Storage
+    path('api/v1/cloud/', include(cloud_urlpatterns)),
 ]
