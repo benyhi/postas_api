@@ -86,6 +86,9 @@ class ProductSupplierListCreateView(generics.ListCreateAPIView):
         product_uuid = self.request.query_params.get("product")
         if product_uuid:
             qs = qs.filter(product__uuid=product_uuid)
+        supplier_uuid = self.request.query_params.get("supplier")
+        if supplier_uuid:
+            qs = qs.filter(supplier__uuid=supplier_uuid)
         is_current = self.request.query_params.get("is_current")
         if is_current is not None:
             qs = qs.filter(is_current=is_current.lower() == "true")

@@ -17,15 +17,21 @@ class SupplierSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 
+class ProductBriefSerializer(serializers.Serializer):
+    uuid = serializers.UUIDField()
+    name = serializers.CharField()
+
+
 class ProductSupplierSerializer(serializers.ModelSerializer):
     supplier = SupplierSerializer(read_only=True)
+    product = ProductBriefSerializer(read_only=True)
     supplier_uuid = serializers.UUIDField(write_only=True)
     product_uuid = serializers.UUIDField(write_only=True)
 
     class Meta:
         model = ProductSupplier
         fields = [
-            "uuid", "product_uuid", "supplier", "supplier_uuid",
+            "uuid", "product", "product_uuid", "supplier", "supplier_uuid",
             "price", "is_current", "since", "until",
         ]
         read_only_fields = ["uuid", "since", "until"]
@@ -49,6 +55,18 @@ class ProductSupplierSerializer(serializers.ModelSerializer):
         supplier_uuid = validated_data.pop("supplier_uuid")
 
         from apps.products.models import Product
+        existing = ProductSupplier.objects.filter(
+            product_id=product_uuid,
+            supplier_id=supplier_uuid,
+        ).first()
+        if existing:
+            existing.is_current = True
+            existing.until = None
+            if "price" in validated_data:
+                existing.price = validated_data["price"]
+            existing.save()
+            return existing
+
         validated_data["product_id"] = product_uuid
         validated_data["supplier_id"] = supplier_uuid
         return super().create(validated_data)
