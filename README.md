@@ -48,7 +48,7 @@ pip install -r requirements.txt
 Copiá el archivo de ejemplo y completá los valores:
 
 ```bash
-cp .env.example .env
+cp .env-example .env
 ```
 
 Editá el archivo `.env` con tus configuraciones locales:
@@ -60,9 +60,21 @@ ALLOWED_HOSTS=localhost,127.0.0.1
 
 # Base de datos (solo si no usás SQLite)
 DATABASE_URL=postgres://usuario:contraseña@localhost:5432/nombre_db
+
+# Email
+EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USE_TLS=True
+EMAIL_HOST_USER=
+EMAIL_HOST_PASSWORD=
+DEFAULT_FROM_EMAIL=POSTAS <noreply@postas.app>
 ```
 
 > ⚠️ **Nunca subas el archivo `.env` al repositorio.** Asegurate de que esté en `.gitignore`.
+
+Para pruebas locales, `django.core.mail.backends.console.EmailBackend` imprime los emails en la consola del servidor.
+Para producción, usá `django.core.mail.backends.smtp.EmailBackend` y completá las credenciales SMTP del proveedor.
 
 ---
 
@@ -104,6 +116,7 @@ python manage.py test
 ```
 /config
 /apps
+   /tenants
    /users
    /products
    /sales
@@ -226,7 +239,8 @@ La documentación incluye **ejemplos de request/response**, **filtros** y **pagi
 | **Users** | `GET/POST /api/v1/users/`, `GET/PATCH/DELETE /api/v1/users/{uuid}/` | CRUD de usuarios (solo OWNER). DELETE es soft delete |
 | **Categories** | `GET/POST /api/v1/categories/`, `GET/PATCH/DELETE /api/v1/categories/{uuid}/` | CRUD de categorías (ADMIN/OWNER) |
 | **Products** | `GET/POST /api/v1/products/`, `GET/PATCH/DELETE /api/v1/products/{uuid}/`, `GET /api/v1/products/search/` | CRUD + búsqueda. Filtros: `category_id`, `low_stock` |
-| **Cashbox** | `POST /open/`, `POST /close/`, `GET /current/`, `GET /`, `GET /{uuid}/` | Apertura, cierre y consulta de cajas |
+| **TenantConfig** | `GET/PATCH /api/v1/tenant/config/` | Configuración del tenant actual. Incluye email para notificaciones de caja |
+| **Cashbox** | `POST /open/`, `POST /close/`, `GET /current/`, `GET /`, `GET /{uuid}/`, `POST /{uuid}/notify-email/` | Apertura, cierre, consulta y notificaciones de caja |
 | **Sales** | `GET/POST /api/v1/sales/`, `GET /{uuid}/`, `POST /{uuid}/cancel/` | Ventas con detalle. Filtros: `user_id`, `payment_method`, `from`, `to` |
 | **Reports** | `GET daily/`, `GET by-payment/`, `GET top-products/`, `GET cashbox-summary/` | Reportes con filtros de fechas y paginación |
 | **Audit** | `GET /api/v1/audit/` | Logs de auditoría. Filtros: `action`, `entity`, `user`, `timestamp` |
@@ -261,6 +275,95 @@ Respuesta:
 2. Clickeá el botón **Authorize** 🔒 en Swagger UI
 3. Ingresá: `Bearer <tu_access_token>`
 4. Todos los endpoints autenticados funcionarán
+
+---
+
+## ⚙️ Configuración del tenant
+
+El módulo `apps.tenants` centraliza la configuración propia de cada tenant.
+
+### Modelos
+
+**`Tenant`** — Entidad base del tenant.
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `uuid` | UUID (PK) | Identificador del tenant |
+| `name` | CharField | Nombre interno/opcional |
+| `active` | BooleanField | Estado del tenant |
+
+**`TenantConfig`** — Configuración operativa del tenant.
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `tenant` | OneToOne FK → Tenant | Configuración asociada al tenant |
+| `notification_email` | EmailField | Email del dueño/empresa que recibe notificaciones |
+| `cashbox_email_notifications_enabled` | BooleanField | Habilita/deshabilita emails automáticos de caja |
+
+### Endpoints
+
+Requieren JWT y rol `OWNER`.
+
+```http
+GET /api/v1/tenant/config/
+Authorization: Bearer <access_token>
+```
+
+Devuelve la configuración del tenant actual. Si no existe, crea una configuración vacía.
+
+```http
+PATCH /api/v1/tenant/config/
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+{
+  "notification_email": "empresa@cliente.com",
+  "cashbox_email_notifications_enabled": true
+}
+```
+
+---
+
+## 📧 Notificaciones de caja por email
+
+Al abrir o cerrar una caja, la API intenta enviar automáticamente un email al valor de `TenantConfig.notification_email`.
+
+Flujo:
+
+1. `POST /api/v1/cashboxes/open/` crea la caja y dispara email de apertura.
+2. `POST /api/v1/cashboxes/close/` cierra la caja y dispara email de cierre.
+3. Si falta `TenantConfig`, falta `notification_email` o las notificaciones están desactivadas, la caja igualmente se abre/cierra.
+4. El resultado queda registrado en auditoría:
+   - `CASHBOX_EMAIL`: email enviado.
+   - `CASHBOX_EMAIL_SKIP`: envío omitido por configuración.
+   - `CASHBOX_EMAIL_FAILED`: fallo técnico al enviar.
+
+El cuerpo del email se arma desde `apps.cashbox.models.Cashbox` e incluye:
+
+| Evento | Datos incluidos |
+|--------|-----------------|
+| Apertura | UUID de caja, tenant, estado, usuario que abrió, fecha de apertura, monto inicial |
+| Cierre | Datos de apertura + usuario que cerró, fecha de cierre, monto final, monto esperado y diferencia |
+
+También existe un endpoint manual para reenviar/notificar el estado actual de una caja:
+
+```http
+POST /api/v1/cashboxes/<cashbox_uuid>/notify-email/
+Authorization: Bearer <access_token>
+```
+
+Permisos: `ADMIN`, `OWNER`, el usuario que abrió la caja o el usuario que la cerró.
+
+Ejemplo de preparación local con el tenant de prueba:
+
+```bash
+curl -X PATCH http://localhost:8000/api/v1/tenant/config/ \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"notification_email": "owner@postas.test", "cashbox_email_notifications_enabled": true}'
+```
+
+Con `EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend`, al abrir/cerrar caja el email se imprime en la consola donde corre `runserver`.
 
 ---
 

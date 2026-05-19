@@ -3,6 +3,7 @@ from datetime import date
 from django.db.models import Sum, Count, Avg, F
 from django.utils import timezone
 from rest_framework import serializers
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, inline_serializer
@@ -148,7 +149,7 @@ class TopProductsReportView(APIView):
 
 
 class CashboxSummaryReportView(APIView):
-    permission_classes = [IsAdminOrOwner]
+    permission_classes = [IsAuthenticated]
 
     @extend_schema(
         summary="Resumen de caja",
@@ -189,6 +190,12 @@ class CashboxSummaryReportView(APIView):
             if not cashbox:
                 return Response({"detail": "No open cashbox."}, status=404)
 
+        if not self._can_view_summary(request, cashbox):
+            return Response(
+                {"detail": "You do not have permission to perform this action."},
+                status=403,
+            )
+
         sales_qs = Sale.objects.filter(
             cashbox=cashbox, status=Sale.Status.COMPLETED,
         )
@@ -214,3 +221,11 @@ class CashboxSummaryReportView(APIView):
             "sale_count": stats["sale_count"] or 0,
             "by_payment_method": list(by_payment),
         })
+
+    @staticmethod
+    def _can_view_summary(request, cashbox):
+        if request.user.role in ("ADMIN", "OWNER"):
+            return True
+        if cashbox.status == Cashbox.Status.OPEN:
+            return True
+        return cashbox.opened_by_id == request.user.pk or cashbox.closed_by_id == request.user.pk

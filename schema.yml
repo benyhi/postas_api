@@ -14,6 +14,9 @@ paths:
           type: string
           enum:
           - CASHBOX
+          - CASHBOX_EMAIL
+          - CASHBOX_EMAIL_FAILED
+          - CASHBOX_EMAIL_SKIP
           - CREATE
           - DELETE
           - LOGIN
@@ -26,6 +29,9 @@ paths:
           * `LOGIN` - Login
           * `SALE` - Sale
           * `CASHBOX` - Cashbox
+          * `CASHBOX_EMAIL` - Cashbox email
+          * `CASHBOX_EMAIL_SKIP` - Cashbox email skipped
+          * `CASHBOX_EMAIL_FAILED` - Cashbox email failed
       - in: query
         name: entity
         schema:
@@ -35,6 +41,7 @@ paths:
           - CATEGORY
           - PRODUCT
           - SALE
+          - TENANT_CONFIG
           - USER
         description: |-
           * `USER` - User
@@ -42,6 +49,7 @@ paths:
           * `CATEGORY` - Category
           * `SALE` - Sale
           * `CASHBOX` - Cashbox
+          * `TENANT_CONFIG` - Tenant config
       - name: page
         required: false
         in: query
@@ -119,6 +127,32 @@ paths:
                     access: eyJhbGciOiJIUzI1NiIs...
                   summary: Respuesta exitosa
           description: ''
+  /api/v1/auth/password-reset/:
+    post:
+      operationId: v1_auth_password_reset_create
+      description: Envía un email con un enlace para restablecer la contraseña.
+      summary: Solicitar restablecimiento de contraseña
+      tags:
+      - Auth
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /api/v1/auth/password-reset/confirm/:
+    post:
+      operationId: v1_auth_password_reset_confirm_create
+      description: Valida el token y establece la nueva contraseña.
+      summary: Confirmar restablecimiento de contraseña
+      tags:
+      - Auth
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
   /api/v1/auth/token/refresh/:
     post:
       operationId: v1_auth_token_refresh_create
@@ -186,6 +220,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CashboxRead'
+          description: ''
+  /api/v1/cashboxes/{uuid}/notify-email/:
+    post:
+      operationId: v1_cashboxes_notify_email_create
+      description: Envia al OWNER del tenant un email con la informacion de apertura
+        o cierre de una caja, segun el estado actual de la caja.
+      summary: Enviar email de notificacion de caja
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Cashbox
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashboxNotifyEmailResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashboxNotifyEmailError'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashboxNotifyEmailForbidden'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashboxNotifyEmailNotFound'
           description: ''
   /api/v1/cashboxes/close/:
     post:
@@ -417,6 +493,272 @@ paths:
       responses:
         '204':
           description: No response body
+  /api/v1/cloud/health/:
+    get:
+      operationId: v1_cloud_health_retrieve
+      description: GET /api/v1/cloud/health/   → prueba conectividad con el bucket
+        (upload -> read -> delete)
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/cloud/images/:
+    get:
+      operationId: v1_cloud_images_retrieve
+      description: |-
+        GET    /api/v1/cloud/images/   → lista imágenes del tenant
+        POST   /api/v1/cloud/images/   → sube una imagen al tenant
+        DELETE /api/v1/cloud/images/   → elimina una imagen del tenant
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+    post:
+      operationId: v1_cloud_images_create
+      description: |-
+        GET    /api/v1/cloud/images/   → lista imágenes del tenant
+        POST   /api/v1/cloud/images/   → sube una imagen al tenant
+        DELETE /api/v1/cloud/images/   → elimina una imagen del tenant
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+    delete:
+      operationId: v1_cloud_images_destroy
+      description: |-
+        GET    /api/v1/cloud/images/   → lista imágenes del tenant
+        POST   /api/v1/cloud/images/   → sube una imagen al tenant
+        DELETE /api/v1/cloud/images/   → elimina una imagen del tenant
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/cloud/images/{key}/:
+    get:
+      operationId: v1_cloud_images_retrieve_2
+      description: |-
+        GET   /api/v1/cloud/images/<path:key>/   → obtiene metadata de una imagen del tenant
+        PUT   /api/v1/cloud/images/<path:key>/   → reemplaza una imagen del tenant
+      parameters:
+      - in: path
+        name: key
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+    put:
+      operationId: v1_cloud_images_update
+      description: |-
+        GET   /api/v1/cloud/images/<path:key>/   → obtiene metadata de una imagen del tenant
+        PUT   /api/v1/cloud/images/<path:key>/   → reemplaza una imagen del tenant
+      parameters:
+      - in: path
+        name: key
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/cloud/public/images/:
+    get:
+      operationId: v1_cloud_public_images_retrieve
+      description: |-
+        GET /api/v1/cloud/public/images/?tenant_id=<uuid>            → lista imágenes (sin auth)
+        GET /api/v1/cloud/public/images/<path:key>/                  → metadata de una imagen (sin auth)
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /api/v1/cloud/public/images/{key}/:
+    get:
+      operationId: v1_cloud_public_images_retrieve_2
+      description: |-
+        GET /api/v1/cloud/public/images/?tenant_id=<uuid>            → lista imágenes (sin auth)
+        GET /api/v1/cloud/public/images/<path:key>/                  → metadata de una imagen (sin auth)
+      parameters:
+      - in: path
+        name: key
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /api/v1/product-suppliers/:
+    get:
+      operationId: v1_product_suppliers_list
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedProductSupplierList'
+          description: ''
+    post:
+      operationId: v1_product_suppliers_create
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductSupplierRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ProductSupplierRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ProductSupplierRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductSupplier'
+          description: ''
+  /api/v1/product-suppliers/{uuid}/:
+    get:
+      operationId: v1_product_suppliers_retrieve
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductSupplier'
+          description: ''
+    patch:
+      operationId: v1_product_suppliers_partial_update
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedProductSupplierRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedProductSupplierRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedProductSupplierRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductSupplier'
+          description: ''
+    delete:
+      operationId: v1_product_suppliers_destroy
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/product-suppliers/switch/:
+    post:
+      operationId: v1_product_suppliers_switch_create
+      description: Desactiva todos los proveedores activos del producto y asigna el
+        nuevo.
+      summary: Cambiar proveedor activo de un producto
+      tags:
+      - Suppliers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SwitchSupplierRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SwitchSupplierRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SwitchSupplierRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductSupplier'
+          description: ''
   /api/v1/products/:
     get:
       operationId: v1_products_list
@@ -825,6 +1167,220 @@ paths:
               schema:
                 $ref: '#/components/schemas/SaleRead'
           description: ''
+  /api/v1/suppliers/:
+    get:
+      operationId: v1_suppliers_list
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSupplierList'
+          description: ''
+    post:
+      operationId: v1_suppliers_create
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SupplierRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SupplierRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SupplierRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Supplier'
+          description: ''
+  /api/v1/suppliers/{uuid}/:
+    get:
+      operationId: v1_suppliers_retrieve
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Supplier'
+          description: ''
+    put:
+      operationId: v1_suppliers_update
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SupplierRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SupplierRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SupplierRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Supplier'
+          description: ''
+    patch:
+      operationId: v1_suppliers_partial_update
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedSupplierRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedSupplierRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedSupplierRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Supplier'
+          description: ''
+    delete:
+      operationId: v1_suppliers_destroy
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/tenant/config/:
+    get:
+      operationId: v1_tenant_config_retrieve
+      description: Devuelve la configuracion del tenant actual. Solo OWNER.
+      summary: Obtener configuracion del tenant
+      tags:
+      - TenantConfig
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantConfig'
+          description: ''
+    put:
+      operationId: v1_tenant_config_update
+      description: Actualiza la configuracion del tenant actual. Solo OWNER.
+      summary: Actualizar configuracion del tenant
+      tags:
+      - TenantConfig
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TenantConfigRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TenantConfigRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TenantConfigRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantConfig'
+          description: ''
+    patch:
+      operationId: v1_tenant_config_partial_update
+      description: Actualiza la configuracion del tenant actual. Solo OWNER.
+      summary: Actualizar configuracion del tenant
+      tags:
+      - TenantConfig
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedTenantConfigRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedTenantConfigRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedTenantConfigRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantConfig'
+          description: ''
   /api/v1/users/:
     get:
       operationId: v1_users_list
@@ -981,6 +1537,9 @@ components:
       - LOGIN
       - SALE
       - CASHBOX
+      - CASHBOX_EMAIL
+      - CASHBOX_EMAIL_SKIP
+      - CASHBOX_EMAIL_FAILED
       type: string
       description: |-
         * `CREATE` - Create
@@ -989,6 +1548,9 @@ components:
         * `LOGIN` - Login
         * `SALE` - Sale
         * `CASHBOX` - Cashbox
+        * `CASHBOX_EMAIL` - Cashbox email
+        * `CASHBOX_EMAIL_SKIP` - Cashbox email skipped
+        * `CASHBOX_EMAIL_FAILED` - Cashbox email failed
     AuditLog:
       type: object
       properties:
@@ -1035,6 +1597,47 @@ components:
           pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
       required:
       - final_amount
+    CashboxNotifyEmailError:
+      type: object
+      properties:
+        detail:
+          type: string
+      required:
+      - detail
+    CashboxNotifyEmailForbidden:
+      type: object
+      properties:
+        detail:
+          type: string
+      required:
+      - detail
+    CashboxNotifyEmailNotFound:
+      type: object
+      properties:
+        detail:
+          type: string
+      required:
+      - detail
+    CashboxNotifyEmailResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+        cashbox:
+          type: string
+          format: uuid
+        event:
+          type: string
+        sent:
+          type: integer
+        recipients_count:
+          type: integer
+      required:
+      - cashbox
+      - detail
+      - event
+      - recipients_count
+      - sent
     CashboxOpenRequest:
       type: object
       properties:
@@ -1253,6 +1856,7 @@ components:
       - CATEGORY
       - SALE
       - CASHBOX
+      - TENANT_CONFIG
       type: string
       description: |-
         * `USER` - User
@@ -1260,6 +1864,7 @@ components:
         * `CATEGORY` - Category
         * `SALE` - Sale
         * `CASHBOX` - Cashbox
+        * `TENANT_CONFIG` - Tenant config
     PaginatedAuditLogList:
       type: object
       required:
@@ -1352,6 +1957,29 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Product'
+    PaginatedProductSupplierList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProductSupplier'
     PaginatedSaleReadList:
       type: object
       required:
@@ -1375,6 +2003,29 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/SaleRead'
+    PaginatedSupplierList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Supplier'
     PaginatedUserReadList:
       type: object
       required:
@@ -1411,6 +2062,9 @@ components:
     PatchedProductRequest:
       type: object
       properties:
+        tenant_id:
+          type: string
+          format: uuid
         name:
           type: string
           minLength: 1
@@ -1439,6 +2093,9 @@ components:
           type: string
           default: ''
           maxLength: 100
+        image_url:
+          type: string
+          maxLength: 500
         category_id:
           type: string
           format: uuid
@@ -1447,6 +2104,56 @@ components:
         active:
           type: boolean
           default: true
+    PatchedProductSupplierRequest:
+      type: object
+      properties:
+        product_uuid:
+          type: string
+          format: uuid
+          writeOnly: true
+        supplier_uuid:
+          type: string
+          format: uuid
+          writeOnly: true
+        price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+          nullable: true
+        is_current:
+          type: boolean
+          default: true
+    PatchedSupplierRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 150
+        phone:
+          type: string
+          maxLength: 20
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        address:
+          type: string
+          maxLength: 200
+        notes:
+          type: string
+        active:
+          type: boolean
+          default: true
+    PatchedTenantConfigRequest:
+      type: object
+      properties:
+        notification_email:
+          type: string
+          format: email
+          maxLength: 254
+        cashbox_email_notifications_enabled:
+          type: boolean
     PatchedUserRequest:
       type: object
       properties:
@@ -1487,7 +2194,6 @@ components:
         tenant_id:
           type: string
           format: uuid
-          readOnly: true
         name:
           type: string
           maxLength: 200
@@ -1515,6 +2221,9 @@ components:
           type: string
           default: ''
           maxLength: 100
+        image_url:
+          type: string
+          maxLength: 500
         category:
           allOf:
           - $ref: '#/components/schemas/Category'
@@ -1522,6 +2231,9 @@ components:
         active:
           type: boolean
           default: true
+        current_suppliers:
+          type: string
+          readOnly: true
         created_at:
           type: string
           format: date-time
@@ -1533,14 +2245,41 @@ components:
       required:
       - category
       - created_at
+      - current_suppliers
       - name
       - price
       - tenant_id
       - updated_at
       - uuid
+    ProductBrief:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+        name:
+          type: string
+      required:
+      - name
+      - uuid
+    ProductBriefRequest:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+      required:
+      - name
+      - uuid
     ProductRequest:
       type: object
       properties:
+        tenant_id:
+          type: string
+          format: uuid
         name:
           type: string
           minLength: 1
@@ -1569,6 +2308,9 @@ components:
           type: string
           default: ''
           maxLength: 100
+        image_url:
+          type: string
+          maxLength: 500
         category_id:
           type: string
           format: uuid
@@ -1580,6 +2322,67 @@ components:
       required:
       - name
       - price
+      - tenant_id
+    ProductSupplier:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+          readOnly: true
+        product:
+          allOf:
+          - $ref: '#/components/schemas/ProductBrief'
+          readOnly: true
+        supplier:
+          allOf:
+          - $ref: '#/components/schemas/Supplier'
+          readOnly: true
+        price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+          nullable: true
+        is_current:
+          type: boolean
+          default: true
+        since:
+          type: string
+          format: date
+          readOnly: true
+        until:
+          type: string
+          format: date
+          readOnly: true
+          nullable: true
+      required:
+      - product
+      - since
+      - supplier
+      - until
+      - uuid
+    ProductSupplierRequest:
+      type: object
+      properties:
+        product_uuid:
+          type: string
+          format: uuid
+          writeOnly: true
+        supplier_uuid:
+          type: string
+          format: uuid
+          writeOnly: true
+        price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+          nullable: true
+        is_current:
+          type: boolean
+          default: true
+      required:
+      - product_uuid
+      - supplier_uuid
     RoleEnum:
       enum:
       - OWNER
@@ -1741,6 +2544,124 @@ components:
       - count
       - payment_method
       - total
+    Supplier:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+          readOnly: true
+        tenant_id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          maxLength: 150
+        phone:
+          type: string
+          maxLength: 20
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        address:
+          type: string
+          maxLength: 200
+        notes:
+          type: string
+        active:
+          type: boolean
+          default: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - name
+      - tenant_id
+      - updated_at
+      - uuid
+    SupplierRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 150
+        phone:
+          type: string
+          maxLength: 20
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        address:
+          type: string
+          maxLength: 200
+        notes:
+          type: string
+        active:
+          type: boolean
+          default: true
+      required:
+      - name
+    SwitchSupplierRequest:
+      type: object
+      properties:
+        product_uuid:
+          type: string
+          format: uuid
+        supplier_uuid:
+          type: string
+          format: uuid
+        price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+          nullable: true
+      required:
+      - product_uuid
+      - supplier_uuid
+    TenantConfig:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          readOnly: true
+        notification_email:
+          type: string
+          format: email
+          maxLength: 254
+        cashbox_email_notifications_enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - tenant_id
+      - updated_at
+    TenantConfigRequest:
+      type: object
+      properties:
+        notification_email:
+          type: string
+          format: email
+          maxLength: 254
+        cashbox_email_notifications_enabled:
+          type: boolean
     TokenRefresh:
       type: object
       properties:
@@ -1912,3 +2833,7 @@ tags:
   description: Reportes de ventas, productos y cajas
 - name: Audit
   description: Logs de auditoria
+- name: Suppliers
+  description: CRUD de proveedores y relaciones producto-proveedor
+- name: TenantConfig
+  description: Configuracion del tenant
