@@ -28,7 +28,7 @@ class ProductSerializer(serializers.ModelSerializer):
         fields = [
             "uuid", "tenant_id", "name", "description",
             "price", "cost", "unit", "stock", "min_stock",
-            "barcode", "category", "category_id", "active",
+            "barcode", "image_url", "category", "category_id", "active",
             "current_suppliers", "created_at", "updated_at",
         ]
 

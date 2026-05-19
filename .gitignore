@@ -7,3 +7,21 @@ __pycache__/
 *.log
 *.env
 .claude/
+# code-review-graph local index
+.code-review-graph/
+
+# AI tools (solo uso local)
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+QODER.md
+.cursorrules
+.windsurfrules
+.mcp.json
+.opencode.json
+.claude/
+.gemini/
+.kiro/
+.qoder/
+.github/code-review-graph.instruction.md
+.vscode/mcp.json

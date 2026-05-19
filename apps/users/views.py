@@ -1,5 +1,11 @@
+from django.core import signing
+from django.core.mail import EmailMessage
+from django.conf import settings as django_settings
+
 from rest_framework import generics, status
 from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework.permissions import AllowAny
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiExample
 
 from apps.users.models import User
@@ -97,9 +103,88 @@ class UserDetailView(generics.RetrieveUpdateDestroyAPIView):
         })
 
     def perform_destroy(self, instance):
-        # Soft delete
         instance.active = False
         instance.save(update_fields=["active"])
         log_action(self.request, "DELETE", "USER", instance.uuid, {
             "username": instance.username,
         })
+
+
+_RESET_SALT = "postas-password-reset"
+_RESET_MAX_AGE = 86400  # 24 hours
+
+
+@extend_schema(tags=["Auth"])
+class PasswordResetRequestView(APIView):
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        summary="Solicitar restablecimiento de contraseña",
+        description="Envía un email con un enlace para restablecer la contraseña.",
+    )
+    def post(self, request):
+        email = request.data.get("email", "").strip()
+        tenant_id = request.data.get("tenant_id", "").strip()
+        _ok_msg = {"detail": "Si existe una cuenta con ese email, recibirás un enlace para restablecer tu contraseña."}
+
+        if not email or not tenant_id:
+            return Response({"detail": "email y tenant_id son requeridos."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            user = User.objects.all_with_inactive().get(email__iexact=email, tenant_id=tenant_id, active=True)
+        except User.DoesNotExist:
+            return Response(_ok_msg)
+
+        token = signing.dumps({"user_pk": str(user.pk)}, salt=_RESET_SALT)
+        reset_url = f"{django_settings.FRONTEND_URL}/reset-password?token={token}"
+
+        body = (
+            f"Hola {user.username},\n\n"
+            f"Recibiste este email porque se solicitó restablecer tu contraseña.\n\n"
+            f"Hacé click en el siguiente enlace:\n{reset_url}\n\n"
+            f"Este enlace expira en 24 horas.\n"
+            f"Si no lo solicitaste, ignorá este email.\n\n"
+            f"-- POSTAS"
+        )
+        email_msg = EmailMessage(
+            subject="Restablecer contraseña - POSTAS",
+            body=body,
+            from_email=django_settings.DEFAULT_FROM_EMAIL,
+            to=[user.email],
+        )
+        email_msg.send(fail_silently=False)
+
+        return Response(_ok_msg)
+
+
+@extend_schema(tags=["Auth"])
+class PasswordResetConfirmView(APIView):
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        summary="Confirmar restablecimiento de contraseña",
+        description="Valida el token y establece la nueva contraseña.",
+    )
+    def post(self, request):
+        token = request.data.get("token", "")
+        new_password = request.data.get("new_password", "")
+
+        if not token or not new_password:
+            return Response({"detail": "token y new_password son requeridos."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if len(new_password) < 8:
+            return Response({"detail": "La contraseña debe tener al menos 8 caracteres."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            data = signing.loads(token, salt=_RESET_SALT, max_age=_RESET_MAX_AGE)
+            user_pk = data["user_pk"]
+            user = User.objects.all_with_inactive().get(pk=user_pk)
+        except signing.SignatureExpired:
+            return Response({"detail": "El enlace ha expirado. Solicitá uno nuevo."}, status=status.HTTP_400_BAD_REQUEST)
+        except (signing.BadSignature, KeyError, User.DoesNotExist, ValueError, TypeError):
+            return Response({"detail": "Enlace inválido."}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.set_password(new_password)
+        user.save()
+
+        return Response({"detail": "Contraseña restablecida exitosamente."})

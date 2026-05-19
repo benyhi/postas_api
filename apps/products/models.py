@@ -47,6 +47,7 @@ class Product(TenantModel):
     stock = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     min_stock = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     barcode = models.CharField(max_length=100, blank=True, default="")
+    image_url = models.CharField(max_length=500, blank=True, default="")
     category = models.ForeignKey(
         Category,
         on_delete=models.SET_NULL,
