@@ -11,6 +11,9 @@ class AuditLog(models.Model):
         LOGIN = "LOGIN", "Login"
         SALE = "SALE", "Sale"
         CASHBOX = "CASHBOX", "Cashbox"
+        CASHBOX_EMAIL = "CASHBOX_EMAIL", "Cashbox email"
+        CASHBOX_EMAIL_SKIP = "CASHBOX_EMAIL_SKIP", "Cashbox email skipped"
+        CASHBOX_EMAIL_FAILED = "CASHBOX_EMAIL_FAILED", "Cashbox email failed"
 
     class Entity(models.TextChoices):
         USER = "USER", "User"
@@ -18,6 +21,7 @@ class AuditLog(models.Model):
         CATEGORY = "CATEGORY", "Category"
         SALE = "SALE", "Sale"
         CASHBOX = "CASHBOX", "Cashbox"
+        TENANT_CONFIG = "TENANT_CONFIG", "Tenant config"
 
     uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tenant_id = models.UUIDField(db_index=True)

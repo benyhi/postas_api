@@ -11,6 +11,7 @@ from apps.cashbox.serializers import (
     CashboxCloseSerializer,
     CashboxReadSerializer,
 )
+from apps.cashbox.services import send_cashbox_notification_email
 from core.permissions.roles import IsAdminOrOwner
 from core.utils.audit import log_action
 
@@ -33,6 +34,7 @@ class CashboxOpenView(generics.CreateAPIView):
         log_action(self.request, "CASHBOX", "CASHBOX", cashbox.uuid, {
             "action": "OPEN", "initial_amount": str(cashbox.initial_amount),
         })
+        send_cashbox_notification_email_safely(self.request, cashbox)
 
 
 class CashboxCloseView(APIView):
@@ -95,6 +97,7 @@ class CashboxCloseView(APIView):
             "expected_amount": str(expected_amount),
             "difference": str(cashbox.difference),
         })
+        send_cashbox_notification_email_safely(request, cashbox)
 
         return Response(CashboxReadSerializer(cashbox).data)
 
@@ -116,6 +119,103 @@ class CashboxCurrentView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
         return Response(CashboxReadSerializer(cashbox).data)
+
+
+class CashboxNotifyEmailView(APIView):
+    @extend_schema(
+        summary="Enviar email de notificacion de caja",
+        description=(
+            "Envia al OWNER del tenant un email con la informacion de apertura "
+            "o cierre de una caja, segun el estado actual de la caja."
+        ),
+        tags=["Cashbox"],
+        responses={
+            200: inline_serializer(
+                name="CashboxNotifyEmailResponse",
+                fields={
+                    "detail": serializers.CharField(),
+                    "cashbox": serializers.UUIDField(),
+                    "event": serializers.CharField(),
+                    "sent": serializers.IntegerField(),
+                    "recipients_count": serializers.IntegerField(),
+                },
+            ),
+            400: inline_serializer(
+                name="CashboxNotifyEmailError",
+                fields={"detail": serializers.CharField()},
+            ),
+            403: inline_serializer(
+                name="CashboxNotifyEmailForbidden",
+                fields={"detail": serializers.CharField()},
+            ),
+            404: inline_serializer(
+                name="CashboxNotifyEmailNotFound",
+                fields={"detail": serializers.CharField()},
+            ),
+        },
+    )
+    def post(self, request, uuid):
+        cashbox = (
+            Cashbox.objects.select_related("opened_by", "closed_by")
+            .filter(uuid=uuid, tenant_id=request.tenant_id)
+            .first()
+        )
+        if not cashbox:
+            return Response(
+                {"detail": "Cashbox not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not self._can_notify(request, cashbox):
+            return Response(
+                {"detail": "Only the user who opened/closed the cashbox or an Admin/Owner can notify it."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            result = send_cashbox_notification_email(cashbox)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        log_action(request, "CASHBOX_EMAIL", "CASHBOX", cashbox.uuid, {
+            "event": result["event"],
+            "sent": result["sent"],
+            "recipients_count": result["recipients_count"],
+        })
+
+        return Response({
+            "detail": "Email notification sent.",
+            "cashbox": cashbox.uuid,
+            "event": result["event"],
+            "sent": result["sent"],
+            "recipients_count": result["recipients_count"],
+        })
+
+    @staticmethod
+    def _can_notify(request, cashbox):
+        if request.user.role in ("ADMIN", "OWNER"):
+            return True
+        return cashbox.opened_by_id == request.user.pk or cashbox.closed_by_id == request.user.pk
+
+
+def send_cashbox_notification_email_safely(request, cashbox):
+    try:
+        result = send_cashbox_notification_email(cashbox)
+    except ValueError as exc:
+        log_action(request, "CASHBOX_EMAIL_SKIP", "CASHBOX", cashbox.uuid, {
+            "reason": str(exc),
+        })
+    except Exception as exc:
+        log_action(request, "CASHBOX_EMAIL_FAILED", "CASHBOX", cashbox.uuid, {
+            "error": f"{type(exc).__name__}: {exc}",
+        })
+    else:
+        log_action(request, "CASHBOX_EMAIL", "CASHBOX", cashbox.uuid, {
+            "event": result["event"],
+            "sent": result["sent"],
+            "recipients_count": result["recipients_count"],
+            "automatic": True,
+        })
 
 
 @extend_schema_view(

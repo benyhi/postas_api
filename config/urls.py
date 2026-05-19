@@ -57,6 +57,9 @@ urlpatterns = [
     path('api/v1/suppliers/', include(suppliers_urlpatterns)),
     path('api/v1/product-suppliers/', include(product_suppliers_urlpatterns)),
 
+    # Tenant configuration
+    path('api/v1/tenant/', include('apps.tenants.urls')),
+
     # Cloud / Storage
     path('api/v1/cloud/', include(cloud_urlpatterns)),
 ]
