@@ -1,16 +1,4 @@
 # 🚀 Proyecto POSTAS
-
----
-
-## 📋 Requisitos previos
-
-Antes de comenzar, asegurate de tener instalado:
-
-- Python 3.14.2
-- pip
-- git
-- (Opcional) PostgreSQL u otro motor de base de datos si el proyecto no usa SQLite
-
 ---
 
 ## ⚙️ Configuración del entorno
@@ -237,11 +225,11 @@ La documentación incluye **ejemplos de request/response**, **filtros** y **pagi
 |-----|-----------|-------------|
 | **Auth** | `POST /api/v1/auth/login/`, `POST /api/v1/auth/token/refresh/` | Login con JWT (tenant_id + username + password) y refresh de token |
 | **Users** | `GET/POST /api/v1/users/`, `GET/PATCH/DELETE /api/v1/users/{uuid}/` | CRUD de usuarios (solo OWNER). DELETE es soft delete |
-| **Categories** | `GET/POST /api/v1/categories/`, `GET/PATCH/DELETE /api/v1/categories/{uuid}/` | CRUD de categorías (ADMIN/OWNER) |
-| **Products** | `GET/POST /api/v1/products/`, `GET/PATCH/DELETE /api/v1/products/{uuid}/`, `GET /api/v1/products/search/` | CRUD + búsqueda. Filtros: `category_id`, `low_stock` |
+| **Categories** | `GET/POST /api/v1/categories/`, `GET/PATCH/DELETE /api/v1/categories/{uuid}/` | Lectura para usuarios autenticados; escritura ADMIN/OWNER |
+| **Products** | `GET/POST /api/v1/products/`, `GET/PATCH/DELETE /api/v1/products/{uuid}/`, `GET /api/v1/products/search/` | Lectura para usuarios autenticados; escritura ADMIN/OWNER. Filtros: `category_id`, `low_stock` |
 | **TenantConfig** | `GET/PATCH /api/v1/tenant/config/` | Configuración del tenant actual. Incluye email para notificaciones de caja |
-| **Cashbox** | `POST /open/`, `POST /close/`, `GET /current/`, `GET /`, `GET /{uuid}/`, `POST /{uuid}/notify-email/` | Apertura, cierre, consulta y notificaciones de caja |
-| **Sales** | `GET/POST /api/v1/sales/`, `GET /{uuid}/`, `POST /{uuid}/cancel/` | Ventas con detalle. Filtros: `user_id`, `payment_method`, `from`, `to` |
+| **Cashbox** | `POST /open/`, `POST /close/`, `GET /current/`, `GET /`, `GET /{uuid}/`, `POST /{uuid}/notify-email/` | EMPLOYEE puede abrir y ver solo caja actual; ADMIN/OWNER pueden listar/ver cajas |
+| **Sales** | `GET/POST /api/v1/sales/`, `GET /{uuid}/`, `POST /{uuid}/cancel/` | EMPLOYEE puede vender y ver ventas de la caja actual; ADMIN/OWNER ven todo. Filtros: `user_id`, `payment_method`, `from`, `to` |
 | **Reports** | `GET daily/`, `GET by-payment/`, `GET top-products/`, `GET cashbox-summary/` | Reportes con filtros de fechas y paginación |
 | **Audit** | `GET /api/v1/audit/` | Logs de auditoría. Filtros: `action`, `entity`, `user`, `timestamp` |
 | **Suppliers** | `GET/POST /api/v1/suppliers/`, `GET/PATCH/DELETE /api/v1/suppliers/{uuid}/` | CRUD de proveedores (ADMIN/OWNER). DELETE es soft delete |
@@ -664,9 +652,8 @@ Respuesta:
 
 ### Notas para el frontend
 
-- La `url` que devuelve cada endpoint ya es pública y se puede usar directamente en un `<img src="...">`.
 - El campo `key` es el identificador interno del archivo en el bucket. Guardarlo si después se necesita actualizar o eliminar la imagen.
-- Las extensiones permitidas son: `.jpg`, `.jpeg`, `.png`, `.webp`.
+- Las extensiones permitidas son: `.jpg`, `.jpeg`, `.png`.
 - Tamaño máximo por defecto: **5 MB**.
 
 ---

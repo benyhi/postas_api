@@ -71,6 +71,34 @@ class CashboxEmailNotificationTests(TestCase):
         self.assertIn("Caja abierta", mail.outbox[0].subject)
         self.assertIn("Monto inicial: 1000.00", mail.outbox[0].body)
 
+    def test_employee_can_open_and_view_current_cashbox(self):
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._access_token(self.employee)}")
+
+        open_response = client.post(
+            "/api/v1/cashboxes/open/",
+            {"initial_amount": "1000.00"},
+            format="json",
+        )
+        current_response = client.get("/api/v1/cashboxes/current/")
+
+        self.assertEqual(open_response.status_code, 201)
+        self.assertEqual(current_response.status_code, 200)
+        self.assertEqual(current_response.data["uuid"], open_response.data["uuid"])
+
+    def test_employee_cannot_list_all_cashboxes(self):
+        Cashbox.objects.create(
+            tenant_id=self.tenant_id,
+            opened_by=self.employee,
+            initial_amount=Decimal("1000.00"),
+        )
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._access_token(self.employee)}")
+
+        response = client.get("/api/v1/cashboxes/")
+
+        self.assertEqual(response.status_code, 403)
+
     def test_close_endpoint_sends_notification_automatically(self):
         Cashbox.objects.create(
             tenant_id=self.tenant_id,

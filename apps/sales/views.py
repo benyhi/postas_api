@@ -15,7 +15,11 @@ from core.utils.audit import log_action
 @extend_schema_view(
     list=extend_schema(
         summary="Listar ventas",
-        description="Lista paginada de ventas. Soporta filtros por user_id, payment_method, from y to.",
+        description=(
+            "Lista paginada de ventas. ADMIN/OWNER ven todo el tenant; "
+            "EMPLOYEE ve solo ventas de la caja abierta actual. "
+            "Soporta filtros por user_id, payment_method, from y to."
+        ),
         tags=["Sales"],
         parameters=[
             OpenApiParameter(name="user_id", description="Filtrar por UUID del usuario vendedor", type=str, required=False),
@@ -37,6 +41,9 @@ class SaleListCreateView(generics.ListCreateAPIView):
         qs = Sale.objects.filter(tenant_id=self.request.tenant_id).select_related(
             "user", "cashbox",
         ).prefetch_related("details__product")
+
+        if self.request.user.role == "EMPLOYEE":
+            qs = qs.filter(cashbox__status="OPEN")
 
         # Filters
         user_id = self.request.query_params.get("user_id")
@@ -87,7 +94,10 @@ class SaleListCreateView(generics.ListCreateAPIView):
 @extend_schema_view(
     retrieve=extend_schema(
         summary="Detalle de venta",
-        description="Devuelve el detalle completo de una venta incluyendo sus items.",
+        description=(
+            "Devuelve el detalle completo de una venta incluyendo sus items. "
+            "EMPLOYEE solo puede ver ventas de la caja abierta actual."
+        ),
         tags=["Sales"],
     ),
 )
@@ -98,9 +108,12 @@ class SaleDetailView(generics.RetrieveAPIView):
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
             return Sale.objects.none()
-        return Sale.objects.filter(
+        qs = Sale.objects.filter(
             tenant_id=self.request.tenant_id,
         ).select_related("user", "cashbox").prefetch_related("details__product")
+        if self.request.user.role == "EMPLOYEE":
+            qs = qs.filter(cashbox__status="OPEN")
+        return qs
 
 
 class SaleCancelView(APIView):

@@ -29,12 +29,15 @@ from core.utils.audit import log_action
 class CashboxOpenView(generics.CreateAPIView):
     serializer_class = CashboxOpenSerializer
 
-    def perform_create(self, serializer):
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
         cashbox = serializer.save()
-        log_action(self.request, "CASHBOX", "CASHBOX", cashbox.uuid, {
+        log_action(request, "CASHBOX", "CASHBOX", cashbox.uuid, {
             "action": "OPEN", "initial_amount": str(cashbox.initial_amount),
         })
-        send_cashbox_notification_email_safely(self.request, cashbox)
+        send_cashbox_notification_email_safely(request, cashbox)
+        return Response(CashboxReadSerializer(cashbox).data, status=status.HTTP_201_CREATED)
 
 
 class CashboxCloseView(APIView):

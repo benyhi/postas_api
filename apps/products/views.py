@@ -4,7 +4,7 @@ from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiExam
 
 from apps.products.models import Category, Product
 from apps.products.serializers import CategorySerializer, ProductSerializer
-from core.permissions.roles import IsAdminOrOwner
+from core.permissions.roles import IsAdminOrOwner, IsAdminOrOwnerOrReadOnly
 from core.utils.audit import log_action
 
 
@@ -13,7 +13,7 @@ from core.utils.audit import log_action
 @extend_schema_view(
     list=extend_schema(
         summary="Listar categorias",
-        description="Devuelve la lista paginada de categorias del tenant.",
+        description="Devuelve la lista paginada de categorias del tenant. Cualquier usuario autenticado puede leer.",
         tags=["Categories"],
     ),
     create=extend_schema(
@@ -31,7 +31,7 @@ from core.utils.audit import log_action
 )
 class CategoryListCreateView(generics.ListCreateAPIView):
     serializer_class = CategorySerializer
-    permission_classes = [IsAdminOrOwner]
+    permission_classes = [IsAdminOrOwnerOrReadOnly]
 
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
@@ -51,7 +51,7 @@ class CategoryListCreateView(generics.ListCreateAPIView):
 )
 class CategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = CategorySerializer
-    permission_classes = [IsAdminOrOwner]
+    permission_classes = [IsAdminOrOwnerOrReadOnly]
     lookup_field = "uuid"
 
     def get_queryset(self):
@@ -74,7 +74,10 @@ class CategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
 @extend_schema_view(
     list=extend_schema(
         summary="Listar productos",
-        description="Lista paginada de productos. Soporta filtros por category_id y low_stock.",
+        description=(
+            "Lista paginada de productos. Cualquier usuario autenticado puede leer. "
+            "Soporta filtros por category_id y low_stock."
+        ),
         tags=["Products"],
         parameters=[
             OpenApiParameter(name="category_id", description="Filtrar por UUID de categoria", type=str, required=False),
@@ -96,7 +99,7 @@ class CategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
 )
 class ProductListCreateView(generics.ListCreateAPIView):
     serializer_class = ProductSerializer
-    permission_classes = [IsAdminOrOwner]
+    permission_classes = [IsAdminOrOwnerOrReadOnly]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = {"category": ["exact"]}
 
@@ -127,7 +130,7 @@ class ProductListCreateView(generics.ListCreateAPIView):
 )
 class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ProductSerializer
-    permission_classes = [IsAdminOrOwner]
+    permission_classes = [IsAdminOrOwnerOrReadOnly]
     lookup_field = "uuid"
 
     def get_queryset(self):
