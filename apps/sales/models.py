@@ -11,6 +11,7 @@ class Sale(TenantModel):
         CASH = "CASH", "Cash"
         CARD = "CARD", "Card"
         TRANSFER = "TRANSFER", "Transfer"
+        MIXED = "MIXED", "Mixed"
 
     class Status(models.TextChoices):
         COMPLETED = "COMPLETED", "Completed"
@@ -29,6 +30,7 @@ class Sale(TenantModel):
     )
     total = models.DecimalField(max_digits=12, decimal_places=2)
     payment_method = models.CharField(max_length=10, choices=PaymentMethod.choices)
+    payments = models.JSONField(default=list, blank=True)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.COMPLETED)
     created_at = models.DateTimeField(auto_now_add=True)
 
