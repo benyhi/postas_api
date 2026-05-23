@@ -69,4 +69,7 @@ urlpatterns = [
 
     # Cloud / Storage
     path('api/v1/cloud/', include(cloud_urlpatterns)),
+
+    # Document extractor
+    path('api/v1/document-extractions/', include('apps.document_extractor.urls')),
 ]

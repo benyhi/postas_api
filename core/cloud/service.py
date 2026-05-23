@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from .config import get_r2_settings
@@ -38,6 +39,7 @@ class ImageService:
             aws_secret_access_key=cfg["secret_key"],
             region_name=None if self.region_name == "auto" else self.region_name,
             endpoint_url=self.endpoint_url,
+            config=Config(signature_version="s3v4"),
         )
 
     # ── helpers ──────────────────────────────────────────────────────────────
@@ -115,6 +117,18 @@ class ImageService:
             if code in ("404", "NoSuchKey"):
                 return {"success": False, "error": "Imagen no encontrada"}
             self.logger.error("Error al obtener imagen: %s", e)
+            return {"success": False, "error": str(e)}
+
+    def presigned_get_url(self, key: str, expires_in: int = 600) -> dict[str, Any]:
+        try:
+            url = self.s3.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": self.bucket_name, "Key": key},
+                ExpiresIn=expires_in,
+            )
+            return {"success": True, "key": key, "url": url}
+        except ClientError as e:
+            self.logger.error("Error al firmar URL de imagen: %s", e)
             return {"success": False, "error": str(e)}
 
     def list_objects(self, prefix: str = "images/", max_keys: int = 200, continuation_token: str | None = None) -> dict[str, Any]:

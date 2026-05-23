@@ -80,6 +80,7 @@ INSTALLED_APPS = [
     'apps.audit',
     'apps.suppliers',
     'apps.tenants',
+    'apps.document_extractor',
 ]
 
 MIDDLEWARE = [
@@ -125,6 +126,7 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Audit', 'description': 'Logs de auditoria'},
         {'name': 'Suppliers', 'description': 'CRUD de proveedores y relaciones producto-proveedor'},
         {'name': 'TenantConfig', 'description': 'Configuracion del tenant'},
+        {'name': 'DocumentExtractor', 'description': 'Extraccion de productos desde documentos con IA'},
     ],
 }
 
@@ -164,11 +166,20 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 import dj_database_url
 
+
+def _database_url():
+    configured_url = os.getenv('DATABASE_URL', '').strip()
+    if configured_url:
+        return configured_url
+
+    return f"sqlite:///{(BASE_DIR / 'db.sqlite3').as_posix()}"
+
+
 DATABASES = {
-    'default': dj_database_url.config(
-        default=os.getenv('DATABASE_URL', 'sqlite:///db.sqlite3'),
-        conn_max_age=600,              
-        conn_health_checks=True,       
+    'default': dj_database_url.parse(
+        _database_url(),
+        conn_max_age=600,
+        conn_health_checks=True,
     )
 }
 
@@ -234,3 +245,19 @@ R2_ENDPOINT_URL = os.getenv("R2_ENDPOINT_URL", "")
 R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL", "")
 R2_ALLOWED_EXTENSIONS = tuple(os.getenv("R2_ALLOWED_EXTENSIONS", ".jpg,.jpeg,.png,.webp").split(","))
 R2_MAX_IMAGE_SIZE = int(os.getenv("R2_MAX_IMAGE_SIZE", str(5 * 1024 * 1024)))
+
+# Document extractor / IA API
+AI_EXTRACTOR_BASE_URL = os.getenv("AI_EXTRACTOR_BASE_URL", "http://localhost:8001/api/v1")
+AI_EXTRACTOR_TOKEN = os.getenv("AI_EXTRACTOR_TOKEN", "")
+AI_EXTRACTOR_SOURCE = os.getenv("AI_EXTRACTOR_SOURCE", "postas_api")
+AI_EXTRACTOR_TIMEOUT = int(os.getenv("AI_EXTRACTOR_TIMEOUT", "90"))
+DOCUMENT_EXTRACTOR_ALLOWED_EXTENSIONS = tuple(
+    ext.strip().lower()
+    for ext in os.getenv("DOCUMENT_EXTRACTOR_ALLOWED_EXTENSIONS", ".jpg,.jpeg,.png").split(",")
+    if ext.strip()
+)
+DOCUMENT_EXTRACTOR_MAX_IMAGE_SIZE = int(os.getenv("DOCUMENT_EXTRACTOR_MAX_IMAGE_SIZE", str(R2_MAX_IMAGE_SIZE)))
+DOCUMENT_EXTRACTOR_PRESIGNED_URL_TTL = int(os.getenv("DOCUMENT_EXTRACTOR_PRESIGNED_URL_TTL", "600"))
+DOCUMENT_EXTRACTOR_MONTHLY_LIMIT = int(os.getenv("DOCUMENT_EXTRACTOR_MONTHLY_LIMIT", "0"))
+DOCUMENT_EXTRACTOR_ACCEPTED_CONFIDENCE = float(os.getenv("DOCUMENT_EXTRACTOR_ACCEPTED_CONFIDENCE", "0.85"))
+DOCUMENT_EXTRACTOR_MIN_CONFIDENCE = float(os.getenv("DOCUMENT_EXTRACTOR_MIN_CONFIDENCE", "0.60"))

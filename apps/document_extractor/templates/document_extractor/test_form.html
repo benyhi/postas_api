@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>POSTAS - Prueba extractor IA</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Arial, sans-serif;
+      color: #1f2937;
+      background: #f3f4f6;
+    }
+
+    body {
+      margin: 0;
+      padding: 32px;
+    }
+
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      margin: 0 0 20px;
+      font-size: 28px;
+    }
+
+    section {
+      margin-bottom: 20px;
+      padding: 20px;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      background: #ffffff;
+    }
+
+    h2 {
+      margin: 0 0 16px;
+      font-size: 20px;
+    }
+
+    form {
+      display: grid;
+      gap: 14px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      font-weight: 600;
+    }
+
+    input,
+    textarea,
+    button {
+      font: inherit;
+    }
+
+    input,
+    textarea {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 10px 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      background: #ffffff;
+    }
+
+    textarea {
+      min-height: 90px;
+      resize: vertical;
+      font-family: Consolas, monospace;
+      font-size: 13px;
+    }
+
+    button {
+      width: fit-content;
+      padding: 10px 14px;
+      border: 0;
+      border-radius: 6px;
+      color: #ffffff;
+      background: #2563eb;
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.65;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .status {
+      margin-top: 12px;
+      font-weight: 700;
+    }
+
+    pre {
+      margin: 12px 0 0;
+      padding: 12px;
+      overflow: auto;
+      border-radius: 6px;
+      background: #111827;
+      color: #e5e7eb;
+      font-size: 13px;
+    }
+
+    @media (max-width: 720px) {
+      body {
+        padding: 16px;
+      }
+
+      .row {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Prueba extractor IA</h1>
+
+    <section>
+      <h2>Login</h2>
+      <form id="login-form">
+        <label>
+          API base
+          <input id="api-base" name="api_base" value="/api/v1" autocomplete="off">
+        </label>
+        <div class="row">
+          <label>
+            Tenant ID
+            <input id="tenant-id" name="tenant_id" required autocomplete="off">
+          </label>
+          <label>
+            Usuario
+            <input id="username" name="username" required autocomplete="username">
+          </label>
+        </div>
+        <label>
+          Password
+          <input id="password" name="password" type="password" required autocomplete="current-password">
+        </label>
+        <button type="submit">Login</button>
+      </form>
+      <label style="margin-top: 14px;">
+        Access token
+        <textarea id="access-token" readonly placeholder="El token aparece aca despues del login"></textarea>
+      </label>
+      <div id="login-status" class="status"></div>
+      <pre id="login-output">{}</pre>
+    </section>
+
+    <section>
+      <h2>Extraccion</h2>
+      <form id="extract-form">
+        <label>
+          Provider
+          <input id="provider" name="provider" value="google_genai" autocomplete="off">
+        </label>
+        <label>
+          Imagen
+          <input id="image" name="image" type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png" required>
+        </label>
+        <label>
+          Metadata opcional
+          <textarea id="metadata" name="metadata" placeholder='{"origen":"test_form"}'></textarea>
+        </label>
+        <button type="submit">Enviar imagen</button>
+      </form>
+      <div id="extract-status" class="status"></div>
+      <pre id="extract-output">{}</pre>
+    </section>
+  </main>
+
+  <script>
+    const tokenKey = "postas_test_access_token";
+    const tenantKey = "postas_test_tenant_id";
+
+    const apiBaseInput = document.getElementById("api-base");
+    const tenantInput = document.getElementById("tenant-id");
+    const tokenOutput = document.getElementById("access-token");
+    const loginStatus = document.getElementById("login-status");
+    const loginOutput = document.getElementById("login-output");
+    const extractStatus = document.getElementById("extract-status");
+    const extractOutput = document.getElementById("extract-output");
+
+    tokenOutput.value = localStorage.getItem(tokenKey) || "";
+    tenantInput.value = localStorage.getItem(tenantKey) || "";
+
+    function apiBase() {
+      return apiBaseInput.value.replace(/\/$/, "");
+    }
+
+    function render(target, value) {
+      target.textContent = JSON.stringify(value, null, 2);
+    }
+
+    async function readJson(response) {
+      const text = await response.text();
+      if (!text) {
+        return {};
+      }
+      try {
+        return JSON.parse(text);
+      } catch (error) {
+        return { raw: text };
+      }
+    }
+
+    document.getElementById("login-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const button = event.submitter;
+      button.disabled = true;
+      loginStatus.textContent = "Enviando login...";
+
+      const payload = {
+        tenant_id: tenantInput.value.trim(),
+        username: document.getElementById("username").value.trim(),
+        password: document.getElementById("password").value,
+      };
+
+      try {
+        const response = await fetch(`${apiBase()}/auth/login/`, {
+          method: "POST",
+          headers: {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+        const data = await readJson(response);
+        render(loginOutput, data);
+        loginStatus.textContent = `Login HTTP ${response.status}`;
+
+        if (data.access) {
+          tokenOutput.value = data.access;
+          localStorage.setItem(tokenKey, data.access);
+          localStorage.setItem(tenantKey, payload.tenant_id);
+        }
+      } catch (error) {
+        loginStatus.textContent = "Error de red en login";
+        render(loginOutput, { error: String(error) });
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    document.getElementById("extract-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const button = event.submitter;
+      button.disabled = true;
+      extractStatus.textContent = "Enviando imagen...";
+
+      const token = tokenOutput.value.trim();
+      if (!token) {
+        extractStatus.textContent = "Primero hace login para obtener un access token.";
+        button.disabled = false;
+        return;
+      }
+
+      const image = document.getElementById("image").files[0];
+      const provider = document.getElementById("provider").value.trim();
+      const metadata = document.getElementById("metadata").value.trim();
+      const formData = new FormData();
+
+      formData.append("image", image);
+      if (provider) {
+        formData.append("provider", provider);
+      }
+      if (metadata) {
+        formData.append("metadata", metadata);
+      }
+
+      try {
+        const response = await fetch(`${apiBase()}/document-extractions/`, {
+          method: "POST",
+          headers: {
+            "Accept": "application/json",
+            "Authorization": `Bearer ${token}`,
+          },
+          body: formData,
+        });
+        const data = await readJson(response);
+        extractStatus.textContent = `Extraccion HTTP ${response.status}`;
+        render(extractOutput, data);
+      } catch (error) {
+        extractStatus.textContent = "Error de red en extraccion";
+        render(extractOutput, { error: String(error) });
+      } finally {
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
