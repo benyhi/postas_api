@@ -44,25 +44,39 @@ Editá el archivo `.env` con tus configuraciones locales:
 ```env
 SECRET_KEY=tu_clave_secreta_aqui
 DEBUG=True
-ALLOWED_HOSTS=localhost,127.0.0.1
+ALLOWED_HOSTS=localhost,127.0.0.1,api,tu-dominio-o-ip
+CSRF_TRUSTED_ORIGINS=http://tu-dominio-o-ip:3000
+FRONTEND_URL=http://tu-dominio-o-ip:3000
+PORT=8000
+WEB_CONCURRENCY=2
+GUNICORN_TIMEOUT=60
 
 # Base de datos (solo si no usás SQLite)
 DATABASE_URL=postgres://usuario:contraseña@localhost:5432/nombre_db
 
 # Email
-EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
+EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
 EMAIL_HOST=smtp.gmail.com
 EMAIL_PORT=587
 EMAIL_USE_TLS=True
+EMAIL_USE_SSL=False
 EMAIL_HOST_USER=
 EMAIL_HOST_PASSWORD=
 DEFAULT_FROM_EMAIL=POSTAS <noreply@postas.app>
+EMAIL_TIMEOUT=20
 ```
 
 > ⚠️ **Nunca subas el archivo `.env` al repositorio.** Asegurate de que esté en `.gitignore`.
 
 Para pruebas locales, `django.core.mail.backends.console.EmailBackend` imprime los emails en la consola del servidor.
 Para producción, usá `django.core.mail.backends.smtp.EmailBackend` y completá las credenciales SMTP del proveedor.
+
+En un servidor de desarrollo con Docker, el `Dockerfile` ejecuta Gunicorn y lee `PORT`, `WEB_CONCURRENCY` y `GUNICORN_TIMEOUT` desde el entorno. El healthcheck del contenedor consulta `GET /healthz/`.
+
+```bash
+docker build -t postas-api:dev .
+docker run --env-file .env -p 8000:8000 postas-api:dev
+```
 
 ---
 
@@ -166,7 +180,7 @@ python manage.py create_test_users --tenant-id <uuid>
 
 ### Poblar la base de datos
 
-Genera datos realistas: 12 categorías, 98 productos (kiosko/almacén), cajas diarias, ventas con detalle y audit logs:
+Genera datos realistas desde `openfoodfacts_products_clean.csv`: categorias del dataset, 100 productos de OpenFoodFacts, cajas diarias, ventas con detalle y audit logs:
 
 ```bash
 python manage.py seed_data
@@ -178,9 +192,11 @@ Opciones:
 python manage.py seed_data --sales 200       # Cantidad de ventas (default: 150)
 python manage.py seed_data --days 60          # Distribuir en N días (default: 30)
 python manage.py seed_data --tenant-id <uuid> # Tenant específico
+python manage.py seed_data --products-csv openfoodfacts_products_clean.csv
 ```
 
 > ⚠️ Requiere que los usuarios de prueba existan. Ejecutar `create_test_users` primero.
+> El comando reemplaza los productos activos del tenant por los del CSV. Si `price`, `cost`, `stock` o `min_stock` vienen en cero, usa valores de prueba deterministicos para que las ventas y validaciones sigan funcionando.
 
 ### Resetear la base de datos
 

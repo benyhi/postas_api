@@ -13,6 +13,7 @@ venv/
 # Django
 db.sqlite3
 *.sqlite3
+*.log
 media/
 
 # Secrets / env files
@@ -36,6 +37,10 @@ docker-compose*.yml
 # IDE
 .vscode/
 .idea/
+
+# Local agent tooling
+.codex/
+AGENT.md
 
 # OS
 .DS_Store

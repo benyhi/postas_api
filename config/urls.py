@@ -15,6 +15,7 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
+from django.http import JsonResponse
 from django.urls import path, include
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 
@@ -23,7 +24,13 @@ from apps.products.urls import products_urlpatterns, categories_urlpatterns
 from apps.suppliers.urls import suppliers_urlpatterns, product_suppliers_urlpatterns
 from core.cloud.urls import cloud_urlpatterns
 
+
+def healthz(_request):
+    return JsonResponse({"status": "ok"})
+
+
 urlpatterns = [
+    path('healthz/', healthz, name='healthz'),
     path('admin/', admin.site.urls),
 
     # Docs

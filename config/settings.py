@@ -31,16 +31,32 @@ if _env_file.exists():
                 os.environ[_k] = _v
 
 
+def env_bool(name, default="False"):
+    return os.getenv(name, default).strip().lower() in ("1", "true", "yes", "on")
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-w$%ltt_)i(xmc9pmop=yevl2y!2oay8ea3t9xpg_)z6gf0c$0g'
+SECRET_KEY = os.getenv(
+    'SECRET_KEY',
+    'django-insecure-w$%ltt_)i(xmc9pmop=yevl2y!2oay8ea3t9xpg_)z6gf0c$0g',
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DEBUG', 'True') == 'True'
+DEBUG = env_bool('DEBUG', 'True')
 
-ALLOWED_HOSTS = [h for h in os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if h]
+ALLOWED_HOSTS = [
+    h.strip()
+    for h in os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+    if h.strip()
+]
+CSRF_TRUSTED_ORIGINS = [
+    h.strip()
+    for h in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',')
+    if h.strip()
+]
 
 # Application definition
 
@@ -196,18 +212,17 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AUTH_USER_MODEL = 'users.User'
 
-def env_bool(name, default="False"):
-    return os.getenv(name, default).strip().lower() in ("1", "true", "yes", "on")
-
 
 # Email
 EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
 EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
 EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", "True")
+EMAIL_USE_SSL = env_bool("EMAIL_USE_SSL", "False")
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "POSTAS <noreply@postas.app>")
+EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", "20"))
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 # Cloudflare R2 / S3

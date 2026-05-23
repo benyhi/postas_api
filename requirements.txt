@@ -6,6 +6,7 @@ django-filter==25.2
 djangorestframework==3.17.0
 djangorestframework_simplejwt==5.5.1
 drf-spectacular==0.29.0
+gunicorn==23.0.0
 psycopg2-binary==2.9.11
 PyJWT==2.12.1
 python-decouple==3.8

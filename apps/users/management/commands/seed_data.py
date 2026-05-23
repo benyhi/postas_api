@@ -1,5 +1,5 @@
 """
-Seed the database with realistic test data for a convenience store / kiosk.
+Seed the database with realistic test data using OpenFoodFacts products.
 
 Creates: categories, products, cashboxes, sales with details, and audit logs.
 Requires test users to exist first (run create_test_users).
@@ -8,11 +8,16 @@ Usage:
     python manage.py seed_data
     python manage.py seed_data --sales 200
     python manage.py seed_data --tenant-id <uuid>
+    python manage.py seed_data --products-csv openfoodfacts_products_clean.csv
 """
 import uuid
 import random
+import csv
+from collections import Counter
 from decimal import Decimal
+from decimal import InvalidOperation
 from datetime import timedelta
+from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
@@ -26,139 +31,126 @@ from apps.audit.models import AuditLog
 
 
 TEST_TENANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+BASE_DIR = Path(__file__).resolve().parents[4]
+DEFAULT_PRODUCTS_CSV = BASE_DIR / "openfoodfacts_products_clean.csv"
+DEFAULT_CATEGORY_NAME = "Sin categoria"
+REQUIRED_PRODUCT_COLUMNS = {
+    "name",
+    "description",
+    "price",
+    "cost",
+    "unit",
+    "stock",
+    "min_stock",
+    "barcode",
+    "image_url",
+    "category",
+}
 
-CATEGORIES_DATA = [
-    "Bebidas",
-    "Snacks",
-    "Lácteos",
-    "Panadería",
-    "Limpieza",
-    "Fiambrería",
-    "Congelados",
-    "Golosinas",
-    "Almacén",
-    "Tabaco",
-    "Higiene Personal",
-    "Verdulería",
-]
 
-PRODUCTS_DATA = [
-    # (name, category, price, cost, unit, stock, min_stock, barcode)
-    # ── Bebidas ──
-    ("Coca-Cola 500ml", "Bebidas", 1500, 900, "U", 80, 20, "7790895000591"),
-    ("Coca-Cola 1.5L", "Bebidas", 2800, 1800, "U", 50, 15, "7790895001291"),
-    ("Coca-Cola 2.25L", "Bebidas", 3500, 2200, "U", 40, 10, "7790895002251"),
-    ("Sprite 500ml", "Bebidas", 1500, 900, "U", 60, 15, "7790895050596"),
-    ("Fanta 500ml", "Bebidas", 1500, 900, "U", 45, 15, "7790895060595"),
-    ("Agua Mineral 500ml", "Bebidas", 800, 400, "U", 100, 30, "7790895100590"),
-    ("Agua Mineral 1.5L", "Bebidas", 1200, 650, "U", 60, 20, "7790895100615"),
-    ("Agua Saborizada Levité 500ml", "Bebidas", 1100, 600, "U", 50, 15, "7790895200108"),
-    ("Cerveza Quilmes 473ml", "Bebidas", 1800, 1100, "U", 120, 30, "7792798002473"),
-    ("Cerveza Brahma 473ml", "Bebidas", 1600, 950, "U", 80, 25, "7891149102473"),
-    ("Cerveza Corona 355ml", "Bebidas", 2800, 1900, "U", 48, 12, "7501064191355"),
-    ("Cerveza Patagonia Amber 473ml", "Bebidas", 3200, 2200, "U", 36, 12, "7792798010473"),
-    ("Gatorade 500ml", "Bebidas", 2000, 1200, "U", 40, 10, "7891149440500"),
-    ("Speed Max 250ml", "Bebidas", 2200, 1400, "U", 36, 10, "7798068430250"),
-    ("Jugo Cepita 1L", "Bebidas", 2500, 1500, "U", 30, 10, "7790580051000"),
-    ("Vino Tinto Estancia 750ml", "Bebidas", 4500, 2800, "U", 24, 6, "7790150000750"),
-    ("Fernet Branca 750ml", "Bebidas", 12000, 8500, "U", 20, 5, "8000570000750"),
-    ("Coca-Cola Zero 500ml", "Bebidas", 1500, 900, "U", 50, 15, "7790895000608"),
-    # ── Snacks ──
-    ("Papas Lays Clásicas 150g", "Snacks", 2800, 1700, "U", 40, 10, "7790310981504"),
-    ("Papas Lays Cheddar 150g", "Snacks", 2800, 1700, "U", 35, 10, "7790310981511"),
-    ("Doritos 150g", "Snacks", 3000, 1800, "U", 30, 10, "7790310150027"),
-    ("Cheetos 120g", "Snacks", 2500, 1500, "U", 25, 8, "7790310120020"),
-    ("Mani Salado 200g", "Snacks", 2200, 1200, "U", 30, 10, "7790310200020"),
-    ("Palitos Salados 200g", "Snacks", 1800, 1000, "U", 35, 10, "7790310200037"),
-    ("Papas Dia 150g", "Snacks", 1800, 1000, "U", 40, 10, "7790310150034"),
-    # ── Lácteos ──
-    ("Leche Entera La Serenísima 1L", "Lácteos", 1500, 950, "U", 60, 20, "7790742000010"),
-    ("Leche Descremada La Serenísima 1L", "Lácteos", 1600, 1000, "U", 40, 15, "7790742000027"),
-    ("Yogur Activia Natural 190g", "Lácteos", 1200, 700, "U", 30, 10, "7791337001900"),
-    ("Yogur Ser Frutilla 190g", "Lácteos", 1300, 750, "U", 25, 8, "7791337001917"),
-    ("Queso Cremoso 1kg", "Lácteos", 8500, 5500, "KG", 15, 5, "7790742100017"),
-    ("Manteca La Serenísima 200g", "Lácteos", 2800, 1800, "U", 20, 8, "7790742200025"),
-    ("Dulce de Leche La Serenísima 400g", "Lácteos", 3500, 2200, "U", 25, 8, "7790742400048"),
-    ("Crema de Leche 200ml", "Lácteos", 1800, 1100, "U", 20, 8, "7790742500042"),
-    # ── Panadería ──
-    ("Pan Lactal Bimbo 500g", "Panadería", 2800, 1700, "U", 25, 8, "7790040005000"),
-    ("Pan Lactal Integral 500g", "Panadería", 3200, 2000, "U", 20, 8, "7790040005017"),
-    ("Medialunas x 6", "Panadería", 2500, 1500, "U", 30, 10, ""),
-    ("Facturas Surtidas x 12", "Panadería", 5000, 3200, "U", 15, 5, ""),
-    ("Galletitas Criollitas 300g", "Panadería", 1800, 1000, "U", 40, 12, "7622210100030"),
-    ("Galletitas Oreo 118g", "Panadería", 1500, 900, "U", 35, 10, "7622210101181"),
-    ("Galletitas Pepitos 118g", "Panadería", 1500, 900, "U", 30, 10, "7622210101198"),
-    # ── Limpieza ──
-    ("Lavandina Ayudín 1L", "Limpieza", 1200, 700, "U", 30, 10, "7790050010009"),
-    ("Detergente Magistral 500ml", "Limpieza", 2500, 1500, "U", 25, 8, "7790050050005"),
-    ("Jabón en Polvo Skip 800g", "Limpieza", 4500, 2800, "U", 20, 8, "7790050080003"),
-    ("Papel Higiénico Elegante x4", "Limpieza", 3200, 2000, "U", 35, 10, "7790060040084"),
-    ("Servilletas x 100", "Limpieza", 1500, 800, "U", 40, 10, "7790060100019"),
-    ("Bolsas Residuos x 10", "Limpieza", 1800, 1000, "U", 30, 10, "7790060100026"),
-    ("Esponja Multiuso", "Limpieza", 800, 400, "U", 50, 15, "7790060100033"),
-    # ── Fiambrería ──
-    ("Jamón Cocido", "Fiambrería", 12000, 8000, "KG", 8, 3, ""),
-    ("Queso Tybo", "Fiambrería", 10000, 6500, "KG", 10, 3, ""),
-    ("Salame Milan", "Fiambrería", 14000, 9500, "KG", 6, 2, ""),
-    ("Mortadela", "Fiambrería", 8000, 5000, "KG", 8, 3, ""),
-    ("Queso Pategras", "Fiambrería", 11000, 7500, "KG", 7, 3, ""),
-    # ── Congelados ──
-    ("Milanesas de Pollo x 4", "Congelados", 5500, 3500, "U", 20, 8, "7790001550041"),
-    ("Empanadas x 12", "Congelados", 7000, 4500, "U", 15, 5, "7790001700121"),
-    ("Hamburguesas x 4", "Congelados", 4500, 2800, "U", 25, 8, "7790001450048"),
-    ("Papas Fritas Congeladas 1kg", "Congelados", 4000, 2500, "U", 20, 8, "7790001400010"),
-    ("Nuggets de Pollo x 12", "Congelados", 5000, 3200, "U", 18, 6, "7790001500121"),
-    ("Pizza Congelada", "Congelados", 4500, 2800, "U", 15, 5, "7790001600013"),
-    # ── Golosinas ──
-    ("Alfajor Havanna", "Golosinas", 2500, 1600, "U", 40, 10, "7790310250010"),
-    ("Alfajor Cachafaz", "Golosinas", 1800, 1100, "U", 50, 15, "7790310250027"),
-    ("Alfajor Capitán del Espacio", "Golosinas", 1200, 700, "U", 60, 20, "7790310250034"),
-    ("Chicle Beldent x 10", "Golosinas", 1500, 900, "U", 40, 10, "7790310350019"),
-    ("Caramelos Flynn Paff x 10", "Golosinas", 800, 400, "U", 50, 15, "7790310350026"),
-    ("Chocolate Milka 100g", "Golosinas", 3500, 2200, "U", 25, 8, "7622210101006"),
-    ("Chocolate Cofler 100g", "Golosinas", 2500, 1500, "U", 30, 10, "7790310450016"),
-    ("Turron Arcor", "Golosinas", 1000, 600, "U", 40, 10, "7790310450023"),
-    # ── Almacén ──
-    ("Arroz Gallo Oro 1kg", "Almacén", 2500, 1500, "U", 40, 12, "7790070010012"),
-    ("Fideos Matarazzo 500g", "Almacén", 1800, 1000, "U", 35, 10, "7790070050010"),
-    ("Aceite Girasol Cocinero 900ml", "Almacén", 3500, 2200, "U", 25, 8, "7790070090005"),
-    ("Azúcar Ledesma 1kg", "Almacén", 1800, 1100, "U", 30, 10, "7790081010009"),
-    ("Yerba Mate Playadito 1kg", "Almacén", 5500, 3500, "U", 40, 10, "7790081050005"),
-    ("Yerba Mate Taragui 1kg", "Almacén", 4800, 3000, "U", 35, 10, "7790081050012"),
-    ("Harina 000 Favorita 1kg", "Almacén", 1500, 800, "U", 30, 10, "7790070110007"),
-    ("Atún La Campagnola 170g", "Almacén", 2800, 1800, "U", 25, 8, "7790070170003"),
-    ("Sal Fina Celusal 500g", "Almacén", 800, 400, "U", 40, 15, "7790070200006"),
-    ("Mermelada BC La Campagnola 390g", "Almacén", 3000, 1800, "U", 20, 8, "7790070300003"),
-    ("Café Instantáneo La Virginia 170g", "Almacén", 5000, 3200, "U", 20, 6, "7790070400000"),
-    ("Mayonesa Hellmanns 475g", "Almacén", 3200, 2000, "U", 25, 8, "7790400474756"),
-    ("Ketchup Hellmanns 400g", "Almacén", 2800, 1700, "U", 20, 8, "7790400400007"),
-    ("Mostaza Savora 250g", "Almacén", 2200, 1300, "U", 20, 8, "7790400250005"),
-    # ── Tabaco ──
-    ("Marlboro Box 20", "Tabaco", 4500, 3600, "U", 50, 15, "77900001"),
-    ("Camel 20", "Tabaco", 4200, 3300, "U", 40, 10, "77900002"),
-    ("Lucky Strike 20", "Tabaco", 4000, 3100, "U", 35, 10, "77900003"),
-    ("Phillip Morris 20", "Tabaco", 3800, 2900, "U", 30, 10, "77900004"),
-    ("Jockey 20", "Tabaco", 2500, 1800, "U", 50, 15, "77900005"),
-    # ── Higiene Personal ──
-    ("Jabón Dove 90g", "Higiene Personal", 1500, 900, "U", 30, 10, "7790500090009"),
-    ("Shampoo Head & Shoulders 200ml", "Higiene Personal", 4500, 2800, "U", 15, 5, "7790500200005"),
-    ("Desodorante Rexona 150ml", "Higiene Personal", 4000, 2500, "U", 20, 6, "7790500150009"),
-    ("Pasta Dental Colgate 90g", "Higiene Personal", 2500, 1500, "U", 25, 8, "7790500100003"),
-    ("Alcohol en Gel 250ml", "Higiene Personal", 2000, 1200, "U", 30, 10, "7790500250008"),
-    # ── Verdulería ──
-    ("Papa", "Verdulería", 1500, 800, "KG", 50, 15, ""),
-    ("Cebolla", "Verdulería", 1800, 900, "KG", 30, 10, ""),
-    ("Tomate", "Verdulería", 3000, 1800, "KG", 25, 8, ""),
-    ("Lechuga", "Verdulería", 2000, 1000, "U", 20, 8, ""),
-    ("Zanahoria", "Verdulería", 1500, 800, "KG", 25, 8, ""),
-    ("Banana", "Verdulería", 2500, 1500, "KG", 30, 10, ""),
-    ("Manzana Roja", "Verdulería", 3000, 1800, "KG", 20, 8, ""),
-    ("Naranja", "Verdulería", 2000, 1200, "KG", 25, 8, ""),
-]
+def clean_text(value, max_length=None):
+    text = (value or "").strip()
+    if max_length is not None:
+        return text[:max_length]
+    return text
+
+
+def parse_decimal(value):
+    text = clean_text(value)
+    if not text:
+        return Decimal("0")
+    try:
+        return Decimal(text)
+    except (InvalidOperation, ValueError):
+        return Decimal("0")
+
+
+def positive_decimal_or_fallback(value, fallback, places):
+    amount = parse_decimal(value)
+    if amount <= 0:
+        amount = fallback
+    return amount.quantize(places)
+
+
+def default_price(index):
+    return Decimal(500 + ((index * 137) % 4500))
+
+
+def default_stock(index):
+    return Decimal(20 + ((index * 7) % 81))
+
+
+def unique_product_name(name, barcode, index, duplicate_names):
+    if name not in duplicate_names:
+        return clean_text(name, 200)
+
+    suffix = f" ({barcode})" if barcode else f" ({index})"
+    return f"{name[:200 - len(suffix)]}{suffix}"
+
+
+def load_products_from_csv(csv_path):
+    path = Path(csv_path).expanduser()
+    if not path.is_absolute():
+        path = BASE_DIR / path
+    if not path.exists():
+        raise CommandError(f"Products CSV not found: {path}")
+
+    with path.open(encoding="utf-8-sig", newline="") as csv_file:
+        reader = csv.DictReader(csv_file)
+        if not reader.fieldnames:
+            raise CommandError(f"Products CSV is empty: {path}")
+
+        missing_columns = REQUIRED_PRODUCT_COLUMNS - set(reader.fieldnames)
+        if missing_columns:
+            missing = ", ".join(sorted(missing_columns))
+            raise CommandError(f"Products CSV is missing columns: {missing}")
+
+        raw_rows = list(reader)
+
+    duplicate_names = {
+        name
+        for name, count in Counter(clean_text(row.get("name")) for row in raw_rows).items()
+        if name and count > 1
+    }
+
+    products = []
+    for index, row in enumerate(raw_rows, start=1):
+        raw_name = clean_text(row.get("name"))
+        if not raw_name:
+            continue
+
+        barcode = clean_text(row.get("barcode"), 100)
+        name = unique_product_name(raw_name, barcode, index, duplicate_names)
+        category_name = clean_text(row.get("category"), 100) or DEFAULT_CATEGORY_NAME
+        price = positive_decimal_or_fallback(row.get("price"), default_price(index), Decimal("0.01"))
+        cost = positive_decimal_or_fallback(row.get("cost"), price * Decimal("0.65"), Decimal("0.01"))
+        stock = positive_decimal_or_fallback(row.get("stock"), default_stock(index), Decimal("0.001"))
+        min_stock = positive_decimal_or_fallback(row.get("min_stock"), stock * Decimal("0.20"), Decimal("0.001"))
+        unit = clean_text(row.get("unit"), 5).upper()
+        if unit not in {Product.Unit.KG, Product.Unit.U}:
+            unit = Product.Unit.U
+
+        products.append({
+            "name": name,
+            "description": clean_text(row.get("description")) or f"Producto de OpenFoodFacts: {raw_name}",
+            "price": price,
+            "cost": cost,
+            "unit": unit,
+            "stock": stock,
+            "min_stock": min_stock,
+            "barcode": barcode,
+            "image_url": clean_text(row.get("image_url"), 500),
+            "category_name": category_name,
+        })
+
+    if not products:
+        raise CommandError(f"Products CSV has no valid products: {path}")
+
+    return products, path
 
 
 class Command(BaseCommand):
-    help = "Seed database with realistic test data (categories, products, cashboxes, sales, audit logs)"
+    help = "Seed database with OpenFoodFacts products, cashboxes, sales, and audit logs"
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -179,12 +171,19 @@ class Command(BaseCommand):
             default=30,
             help="Spread sales over this many past days (default: 30)",
         )
+        parser.add_argument(
+            "--products-csv",
+            type=str,
+            default=str(DEFAULT_PRODUCTS_CSV),
+            help="Path to OpenFoodFacts clean products CSV",
+        )
 
     @transaction.atomic
     def handle(self, *args, **options):
         tenant_id = uuid.UUID(options["tenant_id"])
         num_sales = options["sales"]
         num_days = options["days"]
+        product_rows, products_csv_path = load_products_from_csv(options["products_csv"])
 
         # ── Verify users exist ──────────────────────
         users = list(User.objects.filter(tenant_id=tenant_id))
@@ -197,39 +196,84 @@ class Command(BaseCommand):
         employees = [u for u in users if u.role in ("EMPLOYEE", "ADMIN", "OWNER")]
         self.stdout.write(f"\n  Tenant: {tenant_id}")
         self.stdout.write(f"  Users found: {len(users)}")
+        self.stdout.write(f"  Products CSV: {products_csv_path}")
         self.stdout.write(f"  Generating {num_sales} sales over {num_days} days\n")
 
         # ── Categories ──────────────────────────────
         self.stdout.write("  Creating categories...")
         cat_map = {}
-        for name in CATEGORIES_DATA:
-            cat, _ = Category.all_objects.get_or_create(
-                tenant_id=tenant_id, name=name,
-                defaults={"active": True},
-            )
+        category_names = sorted({product["category_name"] for product in product_rows})
+        Category.all_objects.filter(tenant_id=tenant_id, active=True).exclude(
+            name__in=category_names,
+        ).update(active=False)
+        for name in category_names:
+            cat = Category.all_objects.filter(tenant_id=tenant_id, name=name).first()
+            if cat:
+                if not cat.active:
+                    cat.active = True
+                    cat.save(update_fields=["active"])
+            else:
+                cat = Category.all_objects.create(
+                    tenant_id=tenant_id,
+                    name=name,
+                    active=True,
+                )
             cat_map[name] = cat
         self.stdout.write(self.style.SUCCESS(f"    {len(cat_map)} categories OK"))
 
         # ── Products ────────────────────────────────
-        self.stdout.write("  Creating products...")
+        self.stdout.write("  Replacing products...")
+        deactivated_products = Product.all_objects.filter(
+            tenant_id=tenant_id,
+            active=True,
+        ).update(active=False)
         products = []
-        for name, cat_name, price, cost, unit, stock, min_stock, barcode in PRODUCTS_DATA:
-            prod, _ = Product.all_objects.get_or_create(
-                tenant_id=tenant_id, name=name,
-                defaults={
-                    "description": f"Producto: {name}",
-                    "price": Decimal(str(price)),
-                    "cost": Decimal(str(cost)),
-                    "unit": unit,
-                    "stock": Decimal(str(stock)),
-                    "min_stock": Decimal(str(min_stock)),
-                    "barcode": barcode,
-                    "category": cat_map[cat_name],
-                    "active": True,
-                },
-            )
+        created_products = 0
+        updated_products = 0
+        for product_data in product_rows:
+            barcode = product_data["barcode"]
+            prod = None
+            if barcode:
+                prod = Product.all_objects.filter(
+                    tenant_id=tenant_id,
+                    barcode=barcode,
+                ).order_by("-updated_at").first()
+            if prod is None:
+                prod = Product.all_objects.filter(
+                    tenant_id=tenant_id,
+                    name=product_data["name"],
+                ).order_by("-updated_at").first()
+
+            product_defaults = {
+                "name": product_data["name"],
+                "description": product_data["description"],
+                "price": product_data["price"],
+                "cost": product_data["cost"],
+                "unit": product_data["unit"],
+                "stock": product_data["stock"],
+                "min_stock": product_data["min_stock"],
+                "barcode": barcode,
+                "image_url": product_data["image_url"],
+                "category": cat_map[product_data["category_name"]],
+                "active": True,
+            }
+            if prod:
+                for field, value in product_defaults.items():
+                    setattr(prod, field, value)
+                prod.save(update_fields=list(product_defaults.keys()))
+                updated_products += 1
+            else:
+                prod = Product.all_objects.create(
+                    tenant_id=tenant_id,
+                    **product_defaults,
+                )
+                created_products += 1
             products.append(prod)
-        self.stdout.write(self.style.SUCCESS(f"    {len(products)} products OK"))
+        self.stdout.write(self.style.SUCCESS(
+            f"    {len(products)} products OK "
+            f"({created_products} created, {updated_products} updated, "
+            f"{deactivated_products} deactivated first)"
+        ))
 
         # ── Cashboxes + Sales ───────────────────────
         self.stdout.write("  Creating cashboxes and sales...")
