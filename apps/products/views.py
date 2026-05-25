@@ -1,4 +1,5 @@
 from rest_framework import generics, filters
+from rest_framework.pagination import PageNumberPagination
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiExample, OpenApiParameter
 
@@ -6,6 +7,12 @@ from apps.products.models import Category, Product
 from apps.products.serializers import CategorySerializer, ProductSerializer
 from core.permissions.roles import IsAdminOrOwner, IsAdminOrOwnerOrReadOnly
 from core.utils.audit import log_action
+
+
+class ProductPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 5000
 
 
 # ── Categories ───────────────────────────────────────────────
@@ -102,6 +109,7 @@ class ProductListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAdminOrOwnerOrReadOnly]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = {"category": ["exact"]}
+    pagination_class = ProductPagination
 
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):

@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 
 from django.db.models import Sum, Count, Avg, F
 from django.utils import timezone
@@ -11,6 +12,33 @@ from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExampl
 from apps.sales.models import Sale, SaleDetail
 from apps.cashbox.models import Cashbox
 from core.permissions.roles import IsAdminOrOwner
+
+
+def _build_payment_breakdown(sales_qs):
+    """
+    Build payment method breakdown distributing MIXED sales
+    to their individual component methods.
+    """
+    breakdown = {}
+    for sale in sales_qs:
+        if sale.payment_method == "MIXED":
+            for p in (sale.payments or []):
+                method = p.get("method", "")
+                amount = Decimal(str(p.get("amount", 0)))
+                if method not in breakdown:
+                    breakdown[method] = {"total": Decimal(0), "count": 0}
+                breakdown[method]["total"] += amount
+                breakdown[method]["count"] += 1
+        else:
+            method = sale.payment_method
+            if method not in breakdown:
+                breakdown[method] = {"total": Decimal(0), "count": 0}
+            breakdown[method]["total"] += sale.total
+            breakdown[method]["count"] += 1
+    return [
+        {"payment_method": k, "total": str(v["total"]), "count": v["count"]}
+        for k, v in sorted(breakdown.items())
+    ]
 
 _date_params = [
     OpenApiParameter(name="from", description="Fecha desde (YYYY-MM-DD). Por defecto: hoy.", type=str, required=False),
@@ -95,12 +123,7 @@ class SalesByPaymentReportView(APIView):
         if date_to:
             qs = qs.filter(created_at__date__lte=date_to)
 
-        breakdown = qs.values("payment_method").annotate(
-            total=Sum("total"),
-            count=Count("uuid"),
-        ).order_by("payment_method")
-
-        return Response(list(breakdown))
+        return Response(_build_payment_breakdown(qs))
 
 
 class TopProductsReportView(APIView):
@@ -204,10 +227,6 @@ class CashboxSummaryReportView(APIView):
             sale_count=Count("uuid"),
         )
 
-        by_payment = sales_qs.values("payment_method").annotate(
-            total=Sum("total"), count=Count("uuid"),
-        ).order_by("payment_method")
-
         return Response({
             "cashbox_uuid": cashbox.uuid,
             "status": cashbox.status,
@@ -219,7 +238,7 @@ class CashboxSummaryReportView(APIView):
             "difference": cashbox.difference,
             "total_sold": stats["total_sold"] or 0,
             "sale_count": stats["sale_count"] or 0,
-            "by_payment_method": list(by_payment),
+            "by_payment_method": _build_payment_breakdown(sales_qs),
         })
 
     @staticmethod

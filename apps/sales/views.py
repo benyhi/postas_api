@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.db import transaction
+from django.db.models import Q
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -52,7 +53,22 @@ class SaleListCreateView(generics.ListCreateAPIView):
 
         payment_method = self.request.query_params.get("payment_method")
         if payment_method:
-            qs = qs.filter(payment_method=payment_method)
+            qs = qs.filter(
+                Q(payment_method=payment_method) |
+                Q(payment_method="MIXED", payments__icontains=payment_method)
+            )
+
+        status_filter = self.request.query_params.get("status")
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+
+        min_total = self.request.query_params.get("min_total")
+        if min_total:
+            qs = qs.filter(total__gte=min_total)
+
+        max_total = self.request.query_params.get("max_total")
+        if max_total:
+            qs = qs.filter(total__lte=max_total)
 
         date_from = self.request.query_params.get("from")
         if date_from:
