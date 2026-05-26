@@ -265,7 +265,7 @@ La documentación incluye **ejemplos de request/response**, **filtros** y **pagi
 | **Auth** | `POST /api/v1/auth/login/`, `POST /api/v1/auth/token/refresh/` | Login con JWT (tenant_id + username + password) y refresh de token |
 | **Users** | `GET/POST /api/v1/users/`, `GET/PATCH/DELETE /api/v1/users/{uuid}/` | CRUD de usuarios (solo OWNER). DELETE es soft delete |
 | **Categories** | `GET/POST /api/v1/categories/`, `GET/PATCH/DELETE /api/v1/categories/{uuid}/` | Lectura para usuarios autenticados; escritura ADMIN/OWNER |
-| **Products** | `GET/POST /api/v1/products/`, `GET/PATCH/DELETE /api/v1/products/{uuid}/`, `GET /api/v1/products/search/` | Lectura para usuarios autenticados; escritura ADMIN/OWNER. Filtros: `category_id`, `low_stock` |
+| **Products** | `GET/POST /api/v1/products/`, `POST /api/v1/products/import/`, `GET/PATCH/DELETE /api/v1/products/{uuid}/`, `GET /api/v1/products/search/` | Lectura para usuarios autenticados; escritura ADMIN/OWNER. Filtros: `category_id`, `low_stock` |
 | **TenantConfig** | `GET/PATCH /api/v1/tenant/config/` | Configuración del tenant actual. Incluye email para notificaciones de caja |
 | **Cashbox** | `POST /open/`, `POST /close/`, `GET /current/`, `GET /`, `GET /{uuid}/`, `POST /{uuid}/notify-email/` | EMPLOYEE puede abrir y ver solo caja actual; ADMIN/OWNER pueden listar/ver cajas |
 | **Sales** | `GET/POST /api/v1/sales/`, `GET /{uuid}/`, `POST /{uuid}/cancel/` | EMPLOYEE puede vender y ver ventas de la caja actual; ADMIN/OWNER ven todo. Filtros: `user_id`, `payment_method`, `from`, `to` |
@@ -295,6 +295,35 @@ Respuesta:
   "results": [...]
 }
 ```
+
+### Importacion masiva de productos
+
+`POST /api/v1/products/import/` recibe `multipart/form-data` con el campo `file`.
+
+Formatos soportados:
+
+- `.csv`
+- `.xlsx`
+- `.xls`
+
+Columnas requeridas:
+
+- `name` o `nombre`
+- `price` o `precio`
+
+Columnas opcionales:
+
+- `description` / `descripcion`
+- `cost` / `costo`
+- `unit` / `unidad` (`U` o `KG`)
+- `stock`
+- `min_stock` / `stock_minimo`
+- `barcode` / `codigo_barras`
+- `image_url`
+- `category` / `categoria`
+- `category_id`
+
+El import crea productos nuevos y actualiza coincidencias activas del tenant por `barcode` primero, o por `name` si no hay `barcode`. Si se envia `category`, la categoria se crea si no existe. La respuesta incluye `result` (`OK`, `PARTIAL`, `FAILED`), `items_loaded`, `matches`, `errors`, `elapsed_ms` y `eta_ms`.
 
 ### Autenticación en Swagger UI
 

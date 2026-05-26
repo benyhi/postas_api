@@ -814,6 +814,12 @@ paths:
         description: A page number within the paginated result set.
         schema:
           type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
       tags:
       - v1
       security:
@@ -950,6 +956,66 @@ paths:
       responses:
         '204':
           description: No response body
+  /api/v1/products/import/:
+    post:
+      operationId: v1_products_import_create
+      description: 'Recibe un archivo CSV, XLSX o XLS en multipart/form-data y crea
+        o actualiza productos del tenant. Columnas requeridas: name/nombre y price/precio.
+        Columnas opcionales: description, cost, unit, stock, min_stock, barcode, image_url,
+        category y category_id. Si el barcode o el name coinciden con un producto
+        activo del tenant, se actualiza ese producto y se reporta en matches.'
+      summary: Importar productos
+      tags:
+      - Products
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ProductImportUploadRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ProductImportUploadRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+              examples:
+                RespuestaOK:
+                  value:
+                    result: OK
+                    summary:
+                      total_rows: 2
+                      created: 1
+                      updated: 1
+                      failed: 0
+                      matches: 1
+                      elapsed_ms: 42
+                      eta_ms: 0
+                    items_loaded: []
+                    matches: []
+                    errors: []
+                  summary: Respuesta OK
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
   /api/v1/products/search/:
     get:
       operationId: v1_products_search_list
@@ -2408,6 +2474,14 @@ components:
       required:
       - name
       - uuid
+    ProductImportUploadRequest:
+      type: object
+      properties:
+        file:
+          type: string
+          format: binary
+      required:
+      - file
     ProductRequest:
       type: object
       properties:

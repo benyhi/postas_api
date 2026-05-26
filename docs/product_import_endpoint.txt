@@ -1,0 +1,37 @@
+Feature:
+Product import endpoint
+
+Summary:
+Added POST /api/v1/products/import/ for multipart CSV/XLSX/XLS product imports.
+The endpoint validates file format, required columns, row values, duplicate conflicts,
+tenant-scoped matches, and returns result, summary, items_loaded, matches, errors,
+elapsed_ms, and eta_ms.
+
+Files changed:
+- apps/products/importer.py
+- apps/products/serializers.py
+- apps/products/views.py
+- apps/products/urls.py
+- apps/products/tests.py
+- README.md
+- requirements.txt
+- schema.yml
+
+Tests created or updated:
+- apps/products/tests.py
+
+Documentation updated:
+- README.md
+- schema.yml
+
+Checks run:
+- manage.py test apps.products: passed
+- manage.py check: passed
+- manage.py makemigrations --check --dry-run: passed
+- manage.py spectacular --file schema.yml: passed
+- git diff --check: passed
+
+Important notes:
+- openpyxl and xlrd were added for XLSX/XLS parsing.
+- Uploaded files are rejected before parsing when they exceed 5 MB.
+- drf-spectacular emitted existing APIView serializer warnings while generating schema.yml, but exited successfully.

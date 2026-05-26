@@ -60,3 +60,7 @@ class ProductSerializer(serializers.ModelSerializer):
         if category_id is not None:
             validated_data["category_id"] = category_id
         return super().update(instance, validated_data)
+
+
+class ProductImportUploadSerializer(serializers.Serializer):
+    file = serializers.FileField()

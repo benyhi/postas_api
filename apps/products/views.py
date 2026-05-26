@@ -1,10 +1,19 @@
-from rest_framework import generics, filters
+from rest_framework import generics, filters, status
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.response import Response
+from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
+from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiExample, OpenApiParameter
 
+from apps.products.importer import (
+    ProductImportFormatError,
+    ProductImportService,
+    build_failed_import_payload,
+)
 from apps.products.models import Category, Product
-from apps.products.serializers import CategorySerializer, ProductSerializer
+from apps.products.serializers import CategorySerializer, ProductImportUploadSerializer, ProductSerializer
 from core.permissions.roles import IsAdminOrOwner, IsAdminOrOwnerOrReadOnly
 from core.utils.audit import log_action
 
@@ -128,6 +137,85 @@ class ProductListCreateView(generics.ListCreateAPIView):
         log_action(self.request, "CREATE", "PRODUCT", product.uuid, {
             "name": product.name, "price": str(product.price),
         })
+
+
+@extend_schema(
+    summary="Importar productos",
+    description=(
+        "Recibe un archivo CSV, XLSX o XLS en multipart/form-data y crea o actualiza "
+        "productos del tenant. Columnas requeridas: name/nombre y price/precio. "
+        "Columnas opcionales: description, cost, unit, stock, min_stock, barcode, "
+        "image_url, category y category_id. Si el barcode o el name coinciden con "
+        "un producto activo del tenant, se actualiza ese producto y se reporta en matches."
+    ),
+    tags=["Products"],
+    request=ProductImportUploadSerializer,
+    responses={
+        200: OpenApiTypes.OBJECT,
+        400: OpenApiTypes.OBJECT,
+        403: OpenApiTypes.OBJECT,
+    },
+    examples=[
+        OpenApiExample(
+            "Respuesta OK",
+            value={
+                "result": "OK",
+                "summary": {
+                    "total_rows": 2,
+                    "created": 1,
+                    "updated": 1,
+                    "failed": 0,
+                    "matches": 1,
+                    "elapsed_ms": 42,
+                    "eta_ms": 0,
+                },
+                "items_loaded": [],
+                "matches": [],
+                "errors": [],
+            },
+            response_only=True,
+        ),
+    ],
+)
+class ProductImportView(APIView):
+    permission_classes = [IsAdminOrOwner]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        serializer = ProductImportUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        service = ProductImportService()
+        try:
+            result = service.import_upload(
+                tenant_id=request.tenant_id,
+                upload=serializer.validated_data["file"],
+            )
+        except ProductImportFormatError as exc:
+            return Response(
+                build_failed_import_payload(exc.message, exc.code, exc.errors),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        items_loaded = []
+        for item in result["items"]:
+            product_data = ProductSerializer(item["product"], context={"request": request}).data
+            items_loaded.append({
+                "row": item["row"],
+                "action": item["action"],
+                "match_type": item["match_type"],
+                "product": product_data,
+            })
+
+        payload = {
+            "result": result["result"],
+            "summary": result["summary"],
+            "items_loaded": items_loaded,
+            "matches": result["matches"],
+            "errors": result["errors"],
+        }
+        response_status = status.HTTP_400_BAD_REQUEST if result["result"] == "FAILED" else status.HTTP_200_OK
+        return Response(payload, status=response_status)
 
 
 @extend_schema_view(
