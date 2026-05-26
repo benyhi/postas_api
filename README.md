@@ -359,10 +359,23 @@ El módulo `apps.notifications` centraliza el armado, envío y registro de email
 - Restablecimiento de contraseña.
 - Emails de prueba con `python manage.py debug_email`.
 
+Los emails transaccionales se renderizan desde plantillas Django en `apps/notifications/templates/notifications/`.
+Cada tipo de email tiene una version `.txt` y una version `.html`; el envio incluye ambas para que los clientes de correo y filtros antispam tengan un cuerpo texto claro aunque tambien exista HTML.
+
 Providers:
 
 - `resend`: proveedor principal con la librería oficial `resend`.
 - `django`: fallback actual basado en `EMAIL_BACKEND` (`smtp`, `console`, `locmem`, etc.).
+
+Buenas practicas para reducir riesgo de spam:
+
+- Usar `DEFAULT_FROM_EMAIL` con un dominio propio y verificado en el proveedor elegido.
+- Configurar SPF, DKIM y DMARC para el dominio remitente.
+- Mantener asuntos claros y transaccionales, sin texto engañoso ni exceso de mayusculas.
+- Enviar siempre cuerpo texto + HTML; no usar HTML sin alternativa texto.
+- Evitar imagenes externas, tracking pixels, enlaces acortados y contenido promocional en emails operativos.
+
+El backend aplica las practicas de contenido que controla, pero ningun cambio de plantilla garantiza inbox si el dominio remitente no esta correctamente autenticado.
 
 Cada intento de envío se registra en la tabla `notifications_email_deliveries`, con provider, estado, destinatarios, external id, error y costo estimado en USD. Si Resend falla y el fallback está habilitado, quedan dos filas: una `FAILED` de Resend y una `SENT` de Django si el fallback envió correctamente.
 

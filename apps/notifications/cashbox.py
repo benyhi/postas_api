@@ -2,6 +2,7 @@ from django.utils import timezone
 
 from apps.cashbox.models import Cashbox
 from apps.notifications.models import EmailDelivery
+from apps.notifications.rendering import render_notification
 from apps.notifications.services import send_email
 from apps.tenants.models import TenantConfig
 
@@ -21,7 +22,7 @@ def send_cashbox_notification_email(cashbox):
     recipients = get_cashbox_notification_recipients(cashbox.tenant_id)
     event = "closed" if cashbox.status == Cashbox.Status.CLOSED else "opened"
     subject = _cashbox_subject(event)
-    body = _cashbox_body(cashbox, event)
+    text_body, html_body = _cashbox_bodies(cashbox, event)
 
     result = send_email(
         tenant_id=cashbox.tenant_id,
@@ -31,7 +32,8 @@ def send_cashbox_notification_email(cashbox):
             else EmailDelivery.NotificationType.CASHBOX_OPENED
         ),
         subject=subject,
-        text_body=body,
+        text_body=text_body,
+        html_body=html_body,
         to=recipients,
         related_entity="CASHBOX",
         related_entity_id=cashbox.uuid,
@@ -53,33 +55,39 @@ def _cashbox_subject(event):
     return f"Caja {event_label} - POSTAS"
 
 
-def _cashbox_body(cashbox, event):
+def _cashbox_bodies(cashbox, event):
     event_label = "cierre" if event == "closed" else "apertura"
-    lines = [
-        f"Se registro una {event_label} de caja.",
-        "",
-        f"Caja: {cashbox.uuid}",
-        f"Tenant: {cashbox.tenant_id}",
-        f"Estado: {cashbox.status}",
-        f"Abierta por: {_user_label(cashbox.opened_by)}",
-        f"Fecha de apertura: {_format_datetime(cashbox.opened_at)}",
-        f"Monto inicial: {_format_money(cashbox.initial_amount)}",
+    title_event_label = "cerrada" if event == "closed" else "abierta"
+    rows = [
+        {"label": "Caja", "value": str(cashbox.uuid)},
+        {"label": "Tenant", "value": str(cashbox.tenant_id)},
+        {"label": "Estado", "value": cashbox.status},
+        {"label": "Abierta por", "value": _user_label(cashbox.opened_by)},
+        {"label": "Fecha de apertura", "value": _format_datetime(cashbox.opened_at)},
+        {"label": "Monto inicial", "value": _format_money(cashbox.initial_amount)},
     ]
 
     if event == "closed":
-        lines.extend(
+        rows.extend(
             [
-                "",
-                f"Cerrada por: {_user_label(cashbox.closed_by)}",
-                f"Fecha de cierre: {_format_datetime(cashbox.closed_at)}",
-                f"Monto final: {_format_money(cashbox.final_amount)}",
-                f"Monto esperado: {_format_money(cashbox.expected_amount)}",
-                f"Diferencia: {_format_money(cashbox.difference)}",
+                {"label": "Cerrada por", "value": _user_label(cashbox.closed_by)},
+                {"label": "Fecha de cierre", "value": _format_datetime(cashbox.closed_at)},
+                {"label": "Monto final", "value": _format_money(cashbox.final_amount)},
+                {"label": "Monto esperado", "value": _format_money(cashbox.expected_amount)},
+                {"label": "Diferencia", "value": _format_money(cashbox.difference)},
             ]
         )
 
-    lines.extend(["", "-- POSTAS"])
-    return "\n".join(lines)
+    return render_notification(
+        "cashbox_notification",
+        {
+            "brand_name": "POSTAS",
+            "title": f"Caja {title_event_label}",
+            "preheader": f"Se registro una {event_label} de caja en POSTAS.",
+            "intro": f"Se registro una {event_label} de caja.",
+            "rows": rows,
+        },
+    )
 
 
 def _format_datetime(value):

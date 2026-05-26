@@ -169,6 +169,10 @@ Si envia correctamente, se audita `CASHBOX_EMAIL`.
 
 `apps.notifications.models.EmailDelivery` registra cada intento en `notifications_email_deliveries`, incluyendo provider, estado, destinatarios, external id, error y `estimated_cost_usd`.
 
+Las plantillas viven en `apps/notifications/templates/notifications/` y se renderizan con `apps.notifications.rendering.render_notification`.
+Cada flujo transaccional debe mantener version `.txt` y `.html`; no enviar HTML sin alternativa texto.
+Para reducir riesgo de spam, evitar imagenes externas, tracking pixels, enlaces acortados y contenido promocional en estos emails. La entrega a inbox tambien depende de `DEFAULT_FROM_EMAIL` con dominio verificado y SPF/DKIM/DMARC correctos.
+
 Providers:
 
 ```txt

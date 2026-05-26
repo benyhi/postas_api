@@ -7,9 +7,12 @@ from django.core import mail
 from django.test import SimpleTestCase, TestCase, override_settings
 
 from apps.notifications.models import EmailDelivery
+from apps.notifications.password_reset import send_password_reset_email
 from apps.notifications.providers.base import EmailRequest
 from apps.notifications.providers.resend_provider import ResendEmailProvider
 from apps.notifications.services import send_email
+from apps.tenants.models import Tenant
+from apps.users.models import User
 
 
 @override_settings(RESEND_API_KEY="re_test")
@@ -92,3 +95,42 @@ class EmailServiceTests(TestCase):
         self.assertEqual(delivery.external_id, "email_456")
         self.assertEqual(delivery.recipient_count, 2)
         self.assertEqual(delivery.estimated_cost_usd, Decimal("0.001800"))
+
+    @override_settings(
+        EMAIL_PROVIDER="django",
+        EMAIL_FALLBACK_PROVIDER="",
+        EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    )
+    def test_password_reset_email_uses_text_and_html_templates(self):
+        tenant = Tenant.objects.create(name="Test tenant")
+        user = User.objects.create_user(
+            tenant_id=tenant.uuid,
+            username="owner",
+            email="owner@example.com",
+            password="owner1234",
+            role=User.Role.OWNER,
+        )
+        reset_url = "https://app.example.com/reset-password?token=abc123"
+
+        result = send_password_reset_email(user, reset_url)
+
+        self.assertEqual(result["provider"], EmailDelivery.Provider.DJANGO)
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertIn("Restablecer contrasena", message.subject)
+        self.assertIn(reset_url, message.body)
+        self.assertIn("Este enlace expira en 24 horas.", message.body)
+        html_body = _html_body(message)
+        self.assertIn(reset_url, html_body)
+        self.assertIn("Restablecer contrasena", html_body)
+
+
+def _html_body(message):
+    for alternative in getattr(message, "alternatives", []):
+        content = getattr(alternative, "content", None)
+        mimetype = getattr(alternative, "mimetype", None)
+        if isinstance(alternative, tuple):
+            content, mimetype = alternative
+        if mimetype == "text/html":
+            return content
+    return ""

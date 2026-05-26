@@ -7,6 +7,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import DatabaseError
 
 from apps.notifications.models import EmailDelivery
+from apps.notifications.rendering import render_notification
 from apps.notifications.services import send_email
 from apps.tenants.models import TenantConfig
 
@@ -163,12 +164,21 @@ class Command(BaseCommand):
 
     def _send_test_email(self, recipient, tenant_id):
         self.stdout.write(f"\nSending test email to {recipient}...")
+        text_body, html_body = render_notification(
+            "debug_email",
+            {
+                "brand_name": "POSTAS",
+                "title": "Prueba de email",
+                "preheader": "Mensaje de prueba para validar la configuracion de email de POSTAS.",
+            },
+        )
         try:
             result = send_email(
                 tenant_id=tenant_id,
                 notification_type=EmailDelivery.NotificationType.DEBUG,
                 subject="POSTAS email debug",
-                text_body="This is a POSTAS email debug message.",
+                text_body=text_body,
+                html_body=html_body,
                 to=[recipient],
                 metadata={"source": "debug_email"},
             )

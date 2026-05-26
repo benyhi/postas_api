@@ -59,6 +59,9 @@ class CashboxEmailNotificationTests(TestCase):
         self.assertIn("Caja abierta", mail.outbox[0].subject)
         self.assertIn(str(cashbox.uuid), mail.outbox[0].body)
         self.assertIn("Monto inicial: 1000.00", mail.outbox[0].body)
+        html_body = _html_body(mail.outbox[0])
+        self.assertIn(str(cashbox.uuid), html_body)
+        self.assertIn("Monto inicial", html_body)
         delivery = EmailDelivery.objects.get()
         self.assertEqual(delivery.provider, EmailDelivery.Provider.DJANGO)
         self.assertEqual(delivery.status, EmailDelivery.Status.SENT)
@@ -155,6 +158,10 @@ class CashboxEmailNotificationTests(TestCase):
         self.assertIn("Caja cerrada", mail.outbox[0].subject)
         self.assertIn("Monto final: 1300.00", mail.outbox[0].body)
         self.assertIn("Diferencia: 50.00", mail.outbox[0].body)
+        html_body = _html_body(mail.outbox[0])
+        self.assertIn("Monto final", html_body)
+        self.assertIn("1300.00", html_body)
+        self.assertIn("Diferencia", html_body)
 
     @staticmethod
     def _access_token(user):
@@ -163,3 +170,14 @@ class CashboxEmailNotificationTests(TestCase):
         access["tenant_id"] = str(user.tenant_id)
         access["role"] = user.role
         return str(access)
+
+
+def _html_body(message):
+    for alternative in getattr(message, "alternatives", []):
+        content = getattr(alternative, "content", None)
+        mimetype = getattr(alternative, "mimetype", None)
+        if isinstance(alternative, tuple):
+            content, mimetype = alternative
+        if mimetype == "text/html":
+            return content
+    return ""

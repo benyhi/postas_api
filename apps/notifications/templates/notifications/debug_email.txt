@@ -1,0 +1,5 @@
+Prueba de email
+
+Este es un mensaje de prueba para validar el proveedor, el remitente y el renderizado HTML del sistema de emails.
+
+-- {{ brand_name }}

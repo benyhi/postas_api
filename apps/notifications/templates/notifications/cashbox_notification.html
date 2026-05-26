@@ -1,0 +1,20 @@
+{% extends "notifications/base_email.html" %}
+
+{% block content %}
+<tr>
+  <td style="padding:8px 28px 24px 28px;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;width:100%;border:1px solid #e3e9f2;border-radius:6px;">
+      {% for row in rows %}
+      <tr>
+        <td style="padding:12px 14px;border-bottom:1px solid #e8edf4;background:#f8fafc;color:#526175;font-size:13px;line-height:20px;font-weight:700;width:38%;">
+          {{ row.label }}
+        </td>
+        <td style="padding:12px 14px;border-bottom:1px solid #e8edf4;color:#18212f;font-size:14px;line-height:21px;word-break:break-word;">
+          {{ row.value }}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </td>
+</tr>
+{% endblock %}
