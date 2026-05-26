@@ -55,6 +55,18 @@ GUNICORN_TIMEOUT=60
 DATABASE_URL=postgres://usuario:contraseña@localhost:5432/nombre_db
 
 # Email
+EMAIL_PROVIDER=resend
+EMAIL_FALLBACK_PROVIDER=django
+EMAIL_PROVIDER_FALLBACK_ENABLED=True
+DEFAULT_FROM_EMAIL=POSTAS <notificaciones@tu-dominio-verificado.com>
+EMAIL_TIMEOUT=20
+
+# Resend principal
+RESEND_API_KEY=
+RESEND_API_URL=https://api.resend.com
+RESEND_COST_PER_1000_EMAILS=0.90
+
+# Django fallback actual
 EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
 EMAIL_HOST=smtp.gmail.com
 EMAIL_PORT=587
@@ -62,14 +74,24 @@ EMAIL_USE_TLS=True
 EMAIL_USE_SSL=False
 EMAIL_HOST_USER=
 EMAIL_HOST_PASSWORD=
-DEFAULT_FROM_EMAIL=POSTAS <noreply@postas.app>
-EMAIL_TIMEOUT=20
+DJANGO_EMAIL_COST_PER_1000_EMAILS=0
 ```
 
 > ⚠️ **Nunca subas el archivo `.env` al repositorio.** Asegurate de que esté en `.gitignore`.
 
-Para pruebas locales, `django.core.mail.backends.console.EmailBackend` imprime los emails en la consola del servidor.
-Para producción, usá `django.core.mail.backends.smtp.EmailBackend` y completá las credenciales SMTP del proveedor.
+`EMAIL_PROVIDER=resend` usa la libreria oficial de Resend como proveedor principal.
+`EMAIL_PROVIDER=django` usa el backend actual de Django (`EMAIL_BACKEND`) y permite seguir usando SMTP o `console.EmailBackend`.
+Con `EMAIL_PROVIDER=resend`, si falla Resend y `EMAIL_PROVIDER_FALLBACK_ENABLED=True`, el sistema intenta enviar con `EMAIL_FALLBACK_PROVIDER=django`.
+
+En Railway Free/Trial/Hobby, SMTP no esta disponible. Por eso el proveedor recomendado ahi es Resend por API HTTPS.
+`RESEND_COST_PER_1000_EMAILS` y `DJANGO_EMAIL_COST_PER_1000_EMAILS` se usan para estimar costo por email en la tabla `notifications_email_deliveries`.
+
+Para verificar la configuracion dentro del contenedor:
+
+```bash
+python manage.py debug_email --skip-db
+python manage.py debug_email --tenant-id <tenant_uuid> --send
+```
 
 En un servidor de desarrollo con Docker, el `Dockerfile` ejecuta Gunicorn y lee `PORT`, `WEB_CONCURRENCY` y `GUNICORN_TIMEOUT` desde el entorno. El healthcheck del contenedor consulta `GET /healthz/`.
 
@@ -126,6 +148,7 @@ python manage.py test
    /reports
    /audit
    /suppliers
+   /notifications
 /core
    /middleware
    /permissions
@@ -328,7 +351,20 @@ Content-Type: application/json
 
 ---
 
-## 📧 Notificaciones de caja por email
+## 📧 Notificaciones por email
+
+El módulo `apps.notifications` centraliza el armado, envío y registro de emails. Los flujos actuales son:
+
+- Apertura/cierre de caja a `TenantConfig.notification_email`.
+- Restablecimiento de contraseña.
+- Emails de prueba con `python manage.py debug_email`.
+
+Providers:
+
+- `resend`: proveedor principal con la librería oficial `resend`.
+- `django`: fallback actual basado en `EMAIL_BACKEND` (`smtp`, `console`, `locmem`, etc.).
+
+Cada intento de envío se registra en la tabla `notifications_email_deliveries`, con provider, estado, destinatarios, external id, error y costo estimado en USD. Si Resend falla y el fallback está habilitado, quedan dos filas: una `FAILED` de Resend y una `SENT` de Django si el fallback envió correctamente.
 
 Al abrir o cerrar una caja, la API intenta enviar automáticamente un email al valor de `TenantConfig.notification_email`.
 
@@ -337,7 +373,7 @@ Flujo:
 1. `POST /api/v1/cashboxes/open/` crea la caja y dispara email de apertura.
 2. `POST /api/v1/cashboxes/close/` cierra la caja y dispara email de cierre.
 3. Si falta `TenantConfig`, falta `notification_email` o las notificaciones están desactivadas, la caja igualmente se abre/cierra.
-4. El resultado queda registrado en auditoría:
+4. El resultado queda registrado en `notifications_email_deliveries` y también en auditoría:
    - `CASHBOX_EMAIL`: email enviado.
    - `CASHBOX_EMAIL_SKIP`: envío omitido por configuración.
    - `CASHBOX_EMAIL_FAILED`: fallo técnico al enviar.
@@ -367,7 +403,7 @@ curl -X PATCH http://localhost:8000/api/v1/tenant/config/ \
   -d '{"notification_email": "owner@postas.test", "cashbox_email_notifications_enabled": true}'
 ```
 
-Con `EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend`, al abrir/cerrar caja el email se imprime en la consola donde corre `runserver`.
+Con `EMAIL_PROVIDER=django` y `EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend`, al abrir/cerrar caja el email se imprime en la consola donde corre `runserver`.
 
 ---
 

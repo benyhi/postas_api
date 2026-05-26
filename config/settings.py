@@ -80,6 +80,7 @@ INSTALLED_APPS = [
     'apps.audit',
     'apps.suppliers',
     'apps.tenants',
+    'apps.notifications',
     'apps.document_extractor',
 ]
 
@@ -225,6 +226,9 @@ AUTH_USER_MODEL = 'users.User'
 
 
 # Email
+EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "resend").strip().lower()
+EMAIL_FALLBACK_PROVIDER = os.getenv("EMAIL_FALLBACK_PROVIDER", "django").strip().lower()
+EMAIL_PROVIDER_FALLBACK_ENABLED = env_bool("EMAIL_PROVIDER_FALLBACK_ENABLED", "True")
 EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
 EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
@@ -234,6 +238,10 @@ EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "POSTAS <noreply@postas.app>")
 EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", "20"))
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+RESEND_API_URL = os.getenv("RESEND_API_URL", "https://api.resend.com")
+RESEND_COST_PER_1000_EMAILS = os.getenv("RESEND_COST_PER_1000_EMAILS", "0.90")
+DJANGO_EMAIL_COST_PER_1000_EMAILS = os.getenv("DJANGO_EMAIL_COST_PER_1000_EMAILS", "0")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 # Cloudflare R2 / S3

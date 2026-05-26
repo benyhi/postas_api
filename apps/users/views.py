@@ -1,5 +1,4 @@
 from django.core import signing
-from django.core.mail import EmailMessage
 from django.conf import settings as django_settings
 
 from rest_framework import generics, status
@@ -8,6 +7,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiExample
 
+from apps.notifications.password_reset import send_password_reset_email
 from apps.users.models import User
 from apps.users.serializers import UserSerializer, UserReadSerializer
 from core.permissions.roles import IsOwner
@@ -138,22 +138,7 @@ class PasswordResetRequestView(APIView):
         token = signing.dumps({"user_pk": str(user.pk)}, salt=_RESET_SALT)
         reset_url = f"{django_settings.FRONTEND_URL}/reset-password?token={token}"
 
-        body = (
-            f"Hola {user.username},\n\n"
-            f"Recibiste este email porque se solicitó restablecer tu contraseña.\n\n"
-            f"Hacé click en el siguiente enlace:\n{reset_url}\n\n"
-            f"Este enlace expira en 24 horas.\n"
-            f"Si no lo solicitaste, ignorá este email.\n\n"
-            f"-- POSTAS"
-        )
-        email_msg = EmailMessage(
-            subject="Restablecer contraseña - POSTAS",
-            body=body,
-            from_email=django_settings.DEFAULT_FROM_EMAIL,
-            to=[user.email],
-        )
-        email_msg.send(fail_silently=False)
-
+        send_password_reset_email(user, reset_url)
         return Response(_ok_msg)
 
 

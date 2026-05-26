@@ -616,6 +616,46 @@ paths:
       responses:
         '200':
           description: No response body
+  /api/v1/document-extractions/:
+    get:
+      operationId: v1_document_extractions_retrieve
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+    post:
+      operationId: v1_document_extractions_create
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/document-extractions/{uuid}/:
+    get:
+      operationId: v1_document_extractions_retrieve_2
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentExtractionResult'
+          description: ''
   /api/v1/product-suppliers/:
     get:
       operationId: v1_product_suppliers_list
@@ -1632,10 +1672,22 @@ components:
           type: integer
         recipients_count:
           type: integer
+        provider:
+          type: string
+        delivery_uuid:
+          type: string
+          format: uuid
+        estimated_cost_usd:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,6}(?:\.\d{0,6})?$
       required:
       - cashbox
+      - delivery_uuid
       - detail
+      - estimated_cost_usd
       - event
+      - provider
       - recipients_count
       - sent
     CashboxOpenRequest:
@@ -1849,6 +1901,50 @@ components:
       - average_sale
       - sale_count
       - total_sold
+    DocumentExtractionResult:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+          readOnly: true
+        status:
+          $ref: '#/components/schemas/DocumentExtractionResultStatusEnum'
+        confidence:
+          type: string
+          readOnly: true
+        products:
+          type: string
+          readOnly: true
+        error_message:
+          type: string
+          nullable: true
+      required:
+      - confidence
+      - products
+      - uuid
+    DocumentExtractionResultStatusEnum:
+      enum:
+      - pending
+      - uploading
+      - processing
+      - calling_ai
+      - completed
+      - needs_review
+      - failed
+      - confirmed
+      - cancelled
+      type: string
+      description: |-
+        * `pending` - Pending
+        * `uploading` - Uploading
+        * `processing` - Processing
+        * `calling_ai` - Calling AI
+        * `completed` - Completed
+        * `needs_review` - Needs review
+        * `failed` - Failed
+        * `confirmed` - Confirmed
+        * `cancelled` - Cancelled
     EntityEnum:
       enum:
       - USER
@@ -1865,6 +1961,18 @@ components:
         * `SALE` - Sale
         * `CASHBOX` - Cashbox
         * `TENANT_CONFIG` - Tenant config
+    MethodEnum:
+      enum:
+      - CASH
+      - CARD
+      - TRANSFER
+      - MIXED
+      type: string
+      description: |-
+        * `CASH` - Cash
+        * `CARD` - Card
+        * `TRANSFER` - Transfer
+        * `MIXED` - Mixed
     PaginatedAuditLogList:
       type: object
       required:
@@ -2174,16 +2282,42 @@ components:
           $ref: '#/components/schemas/RoleEnum'
         active:
           type: boolean
+    PaymentItem:
+      type: object
+      properties:
+        method:
+          $ref: '#/components/schemas/MethodEnum'
+        amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+      required:
+      - amount
+      - method
+    PaymentItemRequest:
+      type: object
+      properties:
+        method:
+          $ref: '#/components/schemas/MethodEnum'
+        amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+      required:
+      - amount
+      - method
     PaymentMethodEnum:
       enum:
       - CASH
       - CARD
       - TRANSFER
+      - MIXED
       type: string
       description: |-
         * `CASH` - Cash
         * `CARD` - Card
         * `TRANSFER` - Transfer
+        * `MIXED` - Mixed
     Product:
       type: object
       properties:
@@ -2396,27 +2530,31 @@ components:
     SaleCreate:
       type: object
       properties:
-        payment_method:
-          $ref: '#/components/schemas/PaymentMethodEnum'
+        payments:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentItem'
         items:
           type: array
           items:
             $ref: '#/components/schemas/SaleDetailWrite'
       required:
       - items
-      - payment_method
+      - payments
     SaleCreateRequest:
       type: object
       properties:
-        payment_method:
-          $ref: '#/components/schemas/PaymentMethodEnum'
+        payments:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentItemRequest'
         items:
           type: array
           items:
             $ref: '#/components/schemas/SaleDetailWriteRequest'
       required:
       - items
-      - payment_method
+      - payments
     SaleDetailRead:
       type: object
       properties:
@@ -2500,6 +2638,7 @@ components:
           pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         payment_method:
           $ref: '#/components/schemas/PaymentMethodEnum'
+        payments: {}
         status:
           $ref: '#/components/schemas/SaleReadStatusEnum'
         created_at:
@@ -2837,3 +2976,5 @@ tags:
   description: CRUD de proveedores y relaciones producto-proveedor
 - name: TenantConfig
   description: Configuracion del tenant
+- name: DocumentExtractor
+  description: Extraccion de productos desde documentos con IA

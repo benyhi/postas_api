@@ -1,8 +1,8 @@
-from django.conf import settings as django_settings
-from django.core.mail import EmailMessage
 from django.utils import timezone
 
 from apps.cashbox.models import Cashbox
+from apps.notifications.models import EmailDelivery
+from apps.notifications.services import send_email
 from apps.tenants.models import TenantConfig
 
 
@@ -20,25 +20,35 @@ def get_cashbox_notification_recipients(tenant_id):
 def send_cashbox_notification_email(cashbox):
     recipients = get_cashbox_notification_recipients(cashbox.tenant_id)
     event = "closed" if cashbox.status == Cashbox.Status.CLOSED else "opened"
-    subject = _cashbox_subject(cashbox, event)
+    subject = _cashbox_subject(event)
     body = _cashbox_body(cashbox, event)
 
-    message = EmailMessage(
+    result = send_email(
+        tenant_id=cashbox.tenant_id,
+        notification_type=(
+            EmailDelivery.NotificationType.CASHBOX_CLOSED
+            if event == "closed"
+            else EmailDelivery.NotificationType.CASHBOX_OPENED
+        ),
         subject=subject,
-        body=body,
-        from_email=django_settings.DEFAULT_FROM_EMAIL,
+        text_body=body,
         to=recipients,
+        related_entity="CASHBOX",
+        related_entity_id=cashbox.uuid,
+        metadata={"cashbox": str(cashbox.uuid), "event": event},
     )
-    sent = message.send(fail_silently=False)
 
     return {
         "event": event,
-        "sent": sent,
-        "recipients_count": len(recipients),
+        "sent": result["sent"],
+        "recipients_count": result["recipients_count"],
+        "provider": result["provider"],
+        "delivery_uuid": result["delivery_uuid"],
+        "estimated_cost_usd": result["estimated_cost_usd"],
     }
 
 
-def _cashbox_subject(cashbox, event):
+def _cashbox_subject(event):
     event_label = "cerrada" if event == "closed" else "abierta"
     return f"Caja {event_label} - POSTAS"
 

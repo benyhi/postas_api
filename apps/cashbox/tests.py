@@ -8,12 +8,17 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.cashbox.models import Cashbox
-from apps.cashbox.services import send_cashbox_notification_email
+from apps.notifications.cashbox import send_cashbox_notification_email
+from apps.notifications.models import EmailDelivery
 from apps.tenants.models import Tenant, TenantConfig
 from apps.users.models import User
 
 
-@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+@override_settings(
+    EMAIL_PROVIDER="django",
+    EMAIL_FALLBACK_PROVIDER="",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+)
 class CashboxEmailNotificationTests(TestCase):
     def setUp(self):
         self.tenant_id = uuid.uuid4()
@@ -54,6 +59,10 @@ class CashboxEmailNotificationTests(TestCase):
         self.assertIn("Caja abierta", mail.outbox[0].subject)
         self.assertIn(str(cashbox.uuid), mail.outbox[0].body)
         self.assertIn("Monto inicial: 1000.00", mail.outbox[0].body)
+        delivery = EmailDelivery.objects.get()
+        self.assertEqual(delivery.provider, EmailDelivery.Provider.DJANGO)
+        self.assertEqual(delivery.status, EmailDelivery.Status.SENT)
+        self.assertEqual(delivery.notification_type, EmailDelivery.NotificationType.CASHBOX_OPENED)
 
     def test_open_endpoint_sends_notification_automatically(self):
         client = APIClient()

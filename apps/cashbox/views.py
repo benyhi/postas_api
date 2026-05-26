@@ -1,3 +1,5 @@
+import logging
+
 from django.utils import timezone
 from django.db.models import Sum
 from rest_framework import generics, status, serializers
@@ -11,9 +13,12 @@ from apps.cashbox.serializers import (
     CashboxCloseSerializer,
     CashboxReadSerializer,
 )
-from apps.cashbox.services import send_cashbox_notification_email
+from apps.notifications.cashbox import send_cashbox_notification_email
 from core.permissions.roles import IsAdminOrOwner
 from core.utils.audit import log_action
+
+
+logger = logging.getLogger(__name__)
 
 
 @extend_schema(
@@ -141,6 +146,9 @@ class CashboxNotifyEmailView(APIView):
                     "event": serializers.CharField(),
                     "sent": serializers.IntegerField(),
                     "recipients_count": serializers.IntegerField(),
+                    "provider": serializers.CharField(),
+                    "delivery_uuid": serializers.UUIDField(),
+                    "estimated_cost_usd": serializers.DecimalField(max_digits=12, decimal_places=6),
                 },
             ),
             400: inline_serializer(
@@ -184,6 +192,9 @@ class CashboxNotifyEmailView(APIView):
             "event": result["event"],
             "sent": result["sent"],
             "recipients_count": result["recipients_count"],
+            "provider": result["provider"],
+            "delivery_uuid": str(result["delivery_uuid"]),
+            "estimated_cost_usd": str(result["estimated_cost_usd"]),
         })
 
         return Response({
@@ -192,6 +203,9 @@ class CashboxNotifyEmailView(APIView):
             "event": result["event"],
             "sent": result["sent"],
             "recipients_count": result["recipients_count"],
+            "provider": result["provider"],
+            "delivery_uuid": result["delivery_uuid"],
+            "estimated_cost_usd": result["estimated_cost_usd"],
         })
 
     @staticmethod
@@ -205,18 +219,38 @@ def send_cashbox_notification_email_safely(request, cashbox):
     try:
         result = send_cashbox_notification_email(cashbox)
     except ValueError as exc:
+        logger.warning(
+            "Cashbox email skipped for cashbox %s tenant %s: %s",
+            cashbox.uuid,
+            cashbox.tenant_id,
+            exc,
+        )
         log_action(request, "CASHBOX_EMAIL_SKIP", "CASHBOX", cashbox.uuid, {
             "reason": str(exc),
         })
     except Exception as exc:
+        logger.exception(
+            "Cashbox email failed for cashbox %s tenant %s",
+            cashbox.uuid,
+            cashbox.tenant_id,
+        )
         log_action(request, "CASHBOX_EMAIL_FAILED", "CASHBOX", cashbox.uuid, {
             "error": f"{type(exc).__name__}: {exc}",
         })
     else:
+        logger.info(
+            "Cashbox email sent for cashbox %s tenant %s event %s",
+            cashbox.uuid,
+            cashbox.tenant_id,
+            result["event"],
+        )
         log_action(request, "CASHBOX_EMAIL", "CASHBOX", cashbox.uuid, {
             "event": result["event"],
             "sent": result["sent"],
             "recipients_count": result["recipients_count"],
+            "provider": result["provider"],
+            "delivery_uuid": str(result["delivery_uuid"]),
+            "estimated_cost_usd": str(result["estimated_cost_usd"]),
             "automatic": True,
         })
 

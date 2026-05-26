@@ -87,7 +87,8 @@ apps/
   products/          Categorias y productos
   suppliers/         Proveedores y relacion producto-proveedor
   sales/             Ventas y detalle
-  cashbox/           Apertura/cierre de caja y emails de caja
+  cashbox/           Apertura/cierre de caja
+  notifications/     Providers, armado de emails y tracking de costos
   reports/           Reportes de ventas, productos y caja
   audit/             Logs de auditoria
 ```
@@ -141,7 +142,7 @@ Los endpoints de reportes generales son Admin/Owner. El resumen de caja tiene pe
 - Employee puede ver caja abierta del tenant.
 - Employee puede ver caja cerrada solo si la abrio o la cerro.
 
-## TenantConfig y emails de caja
+## TenantConfig y notificaciones
 
 `apps.tenants` centraliza la configuracion del tenant.
 
@@ -158,17 +159,27 @@ notification_email
 cashbox_email_notifications_enabled
 ```
 
-Al abrir o cerrar caja, `apps.cashbox.views` llama a `send_cashbox_notification_email_safely`. El email se envia a `TenantConfig.notification_email`.
+Al abrir o cerrar caja, `apps.cashbox.views` llama a `send_cashbox_notification_email_safely`. El armado/envio vive en `apps.notifications.cashbox` y el email se envia a `TenantConfig.notification_email`.
 
 Si falta config/email o las notificaciones estan desactivadas, la caja igual se abre/cierra y se audita `CASHBOX_EMAIL_SKIP`.
 
-Si falla SMTP, se audita `CASHBOX_EMAIL_FAILED`.
+Si fallan todos los providers, se audita `CASHBOX_EMAIL_FAILED`.
 
 Si envia correctamente, se audita `CASHBOX_EMAIL`.
 
-Para pruebas locales:
+`apps.notifications.models.EmailDelivery` registra cada intento en `notifications_email_deliveries`, incluyendo provider, estado, destinatarios, external id, error y `estimated_cost_usd`.
+
+Providers:
+
+```txt
+resend  -> principal con la libreria oficial resend
+django  -> fallback actual via EMAIL_BACKEND
+```
+
+Para pruebas locales con el fallback actual:
 
 ```env
+EMAIL_PROVIDER=django
 EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
 ```
 
@@ -177,16 +188,15 @@ Eso imprime el email en la consola donde corre `runserver`.
 Para produccion:
 
 ```env
-EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
-EMAIL_HOST=<smtp-host>
-EMAIL_PORT=587
-EMAIL_USE_TLS=True
-EMAIL_HOST_USER=<smtp-user>
-EMAIL_HOST_PASSWORD=<smtp-password-or-api-key>
-DEFAULT_FROM_EMAIL=POSTAS <noreply@dominio.com>
+EMAIL_PROVIDER=resend
+EMAIL_FALLBACK_PROVIDER=django
+EMAIL_PROVIDER_FALLBACK_ENABLED=True
+RESEND_API_KEY=<api-key>
+RESEND_COST_PER_1000_EMAILS=0.90
+DEFAULT_FROM_EMAIL=POSTAS <notificaciones@dominio-verificado.com>
 ```
 
-`EMAIL_USE_TLS` acepta `true`, `True`, `1`, `yes`, `on`.
+Si se usa `django` como provider/fallback SMTP, `EMAIL_USE_TLS` acepta `true`, `True`, `1`, `yes`, `on`.
 
 ## Cashbox
 
@@ -280,4 +290,3 @@ git -C D:\benja\proyectos\postas_api diff --cached --stat
 ```
 
 Solo commitear cuando el usuario lo pida.
-

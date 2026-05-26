@@ -10,6 +10,11 @@ __pycache__/
 # code-review-graph local index
 .code-review-graph/
 
+# Local launch/editor/agent config
+run.bat
+.codex/
+.vscode/
+
 # AI tools (solo uso local)
 CLAUDE.md
 AGENTS.md
@@ -24,4 +29,3 @@ QODER.md
 .kiro/
 .qoder/
 .github/code-review-graph.instruction.md
-.vscode/mcp.json
