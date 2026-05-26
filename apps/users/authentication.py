@@ -51,6 +51,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         token["tenant_id"] = str(user.tenant_id)
         token["role"] = user.role
         token["user_id"] = str(user.uuid)
+        token["username"] = user.username
         return token
 
 
