@@ -1,7 +1,8 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.db.models import Sum, Count, Avg, F
+from django.db.models.functions import TruncDate
 from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.permissions import IsAuthenticated
@@ -248,3 +249,66 @@ class CashboxSummaryReportView(APIView):
         if cashbox.status == Cashbox.Status.OPEN:
             return True
         return cashbox.opened_by_id == request.user.pk or cashbox.closed_by_id == request.user.pk
+
+
+class SalesByDateView(APIView):
+    permission_classes = [IsAdminOrOwner]
+
+    @extend_schema(
+        summary="Ventas agrupadas por dia",
+        description="Retorna totales de ventas por cada dia en el rango especificado. Sin filtros, retorna la semana actual (lunes a domingo).",
+        tags=["Reports"],
+        parameters=[
+            OpenApiParameter(name="from", description="Fecha desde (YYYY-MM-DD)", type=str, required=False),
+            OpenApiParameter(name="to", description="Fecha hasta (YYYY-MM-DD)", type=str, required=False),
+        ],
+        responses={200: inline_serializer("SalesByDate", fields={
+            "date": serializers.DateField(),
+            "total": serializers.DecimalField(max_digits=12, decimal_places=2),
+            "count": serializers.IntegerField(),
+        }, many=True)},
+    )
+    def get(self, request):
+        today = timezone.now().date()
+        date_from_str = request.query_params.get("from")
+        date_to_str = request.query_params.get("to")
+
+        try:
+            date_from = date.fromisoformat(date_from_str) if date_from_str else today - timedelta(days=today.weekday())
+        except ValueError:
+            date_from = today - timedelta(days=today.weekday())
+
+        try:
+            date_to = date.fromisoformat(date_to_str) if date_to_str else date_from + timedelta(days=6)
+        except ValueError:
+            date_to = date_from + timedelta(days=6)
+
+        qs = Sale.objects.filter(
+            tenant_id=request.tenant_id,
+            status=Sale.Status.COMPLETED,
+            created_at__date__gte=date_from,
+            created_at__date__lte=date_to,
+        )
+
+        by_date = (
+            qs.annotate(day=TruncDate("created_at"))
+            .values("day")
+            .annotate(total=Sum("total"), count=Count("uuid"))
+        )
+        data_map = {str(item["day"]): item for item in by_date}
+
+        result = []
+        current = date_from
+        while current <= date_to:
+            day_str = str(current)
+            if day_str in data_map:
+                result.append({
+                    "date": day_str,
+                    "total": str(data_map[day_str]["total"]),
+                    "count": data_map[day_str]["count"],
+                })
+            else:
+                result.append({"date": day_str, "total": "0.00", "count": 0})
+            current += timedelta(days=1)
+
+        return Response(result)
