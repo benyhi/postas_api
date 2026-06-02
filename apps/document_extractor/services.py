@@ -9,9 +9,14 @@ from django.conf import settings
 from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 
+from apps.platform_billing.client import PlatformBillingClient, PlatformBillingError
 from core.cloud.service import get_image_service
 
 from .models import DocumentExtraction, DocumentExtractionStatus
+
+
+DOCUMENT_EXTRACTION_FEATURE_KEY = "document_extraction"
+DOCUMENT_EXTRACTION_USAGE_PREFIX = "document-extraction"
 
 
 class DocumentExtractionError(Exception):
@@ -90,8 +95,13 @@ class AIExtractorClient:
 
 
 class DocumentExtractionService:
-    def __init__(self, client: AIExtractorClient | None = None) -> None:
+    def __init__(
+        self,
+        client: AIExtractorClient | None = None,
+        platform_client: PlatformBillingClient | None = None,
+    ) -> None:
         self.client = client or AIExtractorClient()
+        self.platform_client = platform_client or PlatformBillingClient()
 
     def extract_from_upload(
         self,
@@ -101,8 +111,8 @@ class DocumentExtractionService:
         provider: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> DocumentExtraction:
-        self._validate_quota(request_obj.tenant_id)
         self._validate_image(image_file)
+        self._check_document_extraction_entitlement(request_obj.tenant_id)
 
         extraction = DocumentExtraction.objects.create(
             tenant_id=request_obj.tenant_id,
@@ -132,6 +142,8 @@ class DocumentExtractionService:
             )
             ai_response = self.client.extract(payload)
             self._apply_ai_response(extraction, ai_response)
+            if self._should_consume_platform_usage(extraction):
+                self._consume_document_extraction_usage(extraction)
             return extraction
         except DocumentExtractionError as exc:
             self._mark_failed(extraction, exc.message)
@@ -141,19 +153,50 @@ class DocumentExtractionService:
             self._mark_failed(extraction, str(exc))
             raise DocumentExtractionError(str(exc), status_code=500, extraction=extraction) from exc
 
-    def _validate_quota(self, tenant_id) -> None:
-        limit = int(getattr(settings, "DOCUMENT_EXTRACTOR_MONTHLY_LIMIT", 0) or 0)
-        if limit <= 0:
-            return
+    def _check_document_extraction_entitlement(self, tenant_id) -> None:
+        resource_count = self._current_monthly_usage(tenant_id)
+        try:
+            response = self.platform_client.check_entitlement(
+                tenant_id,
+                DOCUMENT_EXTRACTION_FEATURE_KEY,
+                amount=1,
+                resource_count=resource_count,
+                context={
+                    "source": "document_extractor",
+                    "operation": "extract_from_upload",
+                },
+            )
+        except PlatformBillingError as exc:
+            raise DocumentExtractionError(
+                "No se pudo validar el permiso del plan. Intenta nuevamente.",
+                status_code=_platform_error_status(exc),
+            ) from exc
 
+        allowed = response.get("allowed")
+        if allowed is True:
+            return
+        if allowed is False:
+            raise DocumentExtractionError(
+                _entitlement_denied_message(response),
+                status_code=403,
+            )
+        raise DocumentExtractionError(
+            "La plataforma de planes no confirmo el permiso para usar extraccion de documentos.",
+            status_code=503,
+        )
+
+    def _current_monthly_usage(self, tenant_id) -> int:
         now = timezone.now()
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        current_usage = DocumentExtraction.objects.filter(
+        return DocumentExtraction.objects.filter(
             tenant_id=tenant_id,
             created_at__gte=month_start,
-        ).exclude(status=DocumentExtractionStatus.CANCELLED).count()
-        if current_usage >= limit:
-            raise DocumentExtractionError("Limite mensual de extracciones alcanzado.", status_code=429)
+            status__in=[
+                DocumentExtractionStatus.COMPLETED,
+                DocumentExtractionStatus.NEEDS_REVIEW,
+                DocumentExtractionStatus.CONFIRMED,
+            ],
+        ).count()
 
     def _validate_image(self, image_file) -> None:
         allowed = getattr(settings, "DOCUMENT_EXTRACTOR_ALLOWED_EXTENSIONS", (".jpg", ".jpeg", ".png"))
@@ -257,6 +300,44 @@ class DocumentExtractionService:
         extraction.completed_at = _to_datetime(response.get("completed_at")) or timezone.now()
         extraction.save()
 
+    def _consume_document_extraction_usage(self, extraction: DocumentExtraction) -> None:
+        try:
+            response = self.platform_client.check_and_consume(
+                extraction.tenant_id,
+                DOCUMENT_EXTRACTION_FEATURE_KEY,
+                amount=1,
+                external_id=extraction.uuid,
+                idempotency_key=f"{DOCUMENT_EXTRACTION_USAGE_PREFIX}:{extraction.uuid}",
+                occurred_at=extraction.completed_at,
+                metadata=_document_extraction_usage_metadata(extraction),
+                context={
+                    "source": "document_extractor",
+                    "operation": "consume_after_successful_extraction",
+                },
+            )
+        except PlatformBillingError as exc:
+            if _is_duplicate_usage_response(exc):
+                return
+            raise DocumentExtractionError(
+                "No se pudo registrar el consumo del plan. Intenta nuevamente.",
+                status_code=_platform_error_status(exc),
+                extraction=extraction,
+            ) from exc
+        if _is_confirmed_usage_response(response):
+            return
+        raise DocumentExtractionError(
+            _usage_consume_failure_message(response),
+            status_code=_usage_consume_failure_status(response),
+            extraction=extraction,
+        )
+
+    @staticmethod
+    def _should_consume_platform_usage(extraction: DocumentExtraction) -> bool:
+        return extraction.status in {
+            DocumentExtractionStatus.COMPLETED,
+            DocumentExtractionStatus.NEEDS_REVIEW,
+        }
+
     def _set_status(self, extraction: DocumentExtraction, status: str, **extra_fields: Any) -> None:
         extraction.status = status
         update_fields = ["status", "updated_at"]
@@ -280,6 +361,125 @@ def _nested_get(data: dict[str, Any], key: str) -> Any:
         if isinstance(nested, dict) and key in nested:
             return nested.get(key)
     return None
+
+
+def _entitlement_denied_message(response: dict[str, Any]) -> str:
+    detail = (
+        response.get("message")
+        or response.get("detail")
+        or response.get("reason")
+        or response.get("error")
+    )
+    if detail:
+        return str(detail)
+    return "Tu plan no permite usar extraccion de documentos."
+
+
+def _platform_error_status(exc: PlatformBillingError) -> int:
+    if 400 <= exc.status_code <= 599:
+        return exc.status_code
+    return 503
+
+
+def _document_extraction_usage_metadata(extraction: DocumentExtraction) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "provider": extraction.provider,
+        "model": extraction.model,
+        "status": extraction.status,
+        "estimated_cost_usd": str(extraction.estimated_cost_usd),
+        "prompt_tokens": extraction.prompt_tokens,
+        "completion_tokens": extraction.completion_tokens,
+        "total_tokens": extraction.total_tokens,
+        "latency_ms": extraction.latency_ms,
+    }
+    if extraction.ai_extraction_id:
+        metadata["ai_extraction_id"] = str(extraction.ai_extraction_id)
+    if extraction.ai_usage_id:
+        metadata["ai_usage_id"] = str(extraction.ai_usage_id)
+    return metadata
+
+
+def _is_confirmed_usage_response(response: dict[str, Any]) -> bool:
+    if _is_duplicate_usage_data(response):
+        return True
+    if _has_explicit_usage_denial(response):
+        return False
+    if response.get("consumed") is True:
+        return True
+    if response.get("recorded") is True:
+        return True
+    if response.get("created") is True:
+        return True
+    if response.get("usage_id") or response.get("id"):
+        return True
+    usage = response.get("usage")
+    return isinstance(usage, dict) and bool(usage.get("id") or usage.get("uuid"))
+
+
+def _has_explicit_usage_denial(response: dict[str, Any]) -> bool:
+    for key in ("allowed", "consumed", "recorded", "created"):
+        if response.get(key) is False:
+            return True
+    usage = response.get("usage")
+    if isinstance(usage, dict):
+        for key in ("allowed", "consumed", "recorded", "created"):
+            if usage.get(key) is False:
+                return True
+    return False
+
+
+def _is_duplicate_usage_data(data: dict[str, Any]) -> bool:
+    code = str(data.get("code") or data.get("error_code") or "").lower()
+    detail = str(data.get("detail") or data.get("message") or data.get("error") or "").lower()
+    status = str(data.get("status") or "").lower()
+    duplicate_codes = {
+        "duplicate_usage",
+        "usage_already_consumed",
+        "usage_already_recorded",
+        "idempotency_key_exists",
+        "idempotency_duplicate",
+        "idempotent_replay",
+    }
+    return (
+        data.get("duplicate") is True
+        or data.get("idempotent") is True
+        or data.get("already_recorded") is True
+        or code in duplicate_codes
+        or status in {"duplicate", "already_consumed", "idempotent_replay"}
+        or ("idempotency" in detail and "duplicate" in detail)
+        or ("already" in detail and "consum" in detail)
+        or ("already" in detail and "record" in detail)
+    )
+
+
+def _usage_consume_failure_message(response: dict[str, Any]) -> str:
+    detail = (
+        response.get("message")
+        or response.get("detail")
+        or response.get("reason")
+        or response.get("error")
+    )
+    if detail:
+        return str(detail)
+    return "La plataforma de planes no confirmo el registro del consumo."
+
+
+def _usage_consume_failure_status(response: dict[str, Any]) -> int:
+    text = " ".join(
+        str(response.get(key) or "").lower()
+        for key in ("code", "error_code", "message", "detail", "reason", "error")
+    )
+    if "limit" in text or "quota" in text or "over" in text:
+        return 429
+    if response.get("allowed") is False:
+        return 403
+    return 503
+
+
+def _is_duplicate_usage_response(exc: PlatformBillingError) -> bool:
+    if exc.status_code != 409:
+        return False
+    return _is_duplicate_usage_data(exc.response_data)
 
 
 def _extract_products(data: dict[str, Any]) -> list[dict[str, Any]]:

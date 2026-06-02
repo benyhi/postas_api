@@ -75,6 +75,12 @@ EMAIL_USE_SSL=False
 EMAIL_HOST_USER=
 EMAIL_HOST_PASSWORD=
 DJANGO_EMAIL_COST_PER_1000_EMAILS=0
+
+# Platform billing / planes y consumos
+POSTAS_PLATFORM_API_URL=http://localhost:8001
+POSTAS_PLATFORM_SERVICE_TOKEN=token_compartido
+POSTAS_PLATFORM_SOURCE=postas_api
+POSTAS_PLATFORM_TIMEOUT_SECONDS=10
 ```
 
 > ⚠️ **Nunca subas el archivo `.env` al repositorio.** Asegurate de que esté en `.gitignore`.
@@ -85,6 +91,30 @@ Con `EMAIL_PROVIDER=resend`, si falla Resend y `EMAIL_PROVIDER_FALLBACK_ENABLED=
 
 En Railway Free/Trial/Hobby, SMTP no esta disponible. Por eso el proveedor recomendado ahi es Resend por API HTTPS.
 `RESEND_COST_PER_1000_EMAILS` y `DJANGO_EMAIL_COST_PER_1000_EMAILS` se usan para estimar costo por email en la tabla `notifications_email_deliveries`.
+
+### Platform billing y planes
+
+`postas_platform_api` es la fuente de verdad para planes, permisos y consumos. `postas_api` no mantiene catalogo local de planes, features ni limites.
+
+El cliente interno usa los endpoints privados de `postas_platform_api` bajo `/internal/v1` y envia en cada request:
+
+```http
+X-Postas-Source: postas_api
+X-Postas-Service-Token: <token compartido>
+```
+
+Configuracion local minima:
+
+```env
+POSTAS_PLATFORM_API_URL=http://localhost:8001
+POSTAS_PLATFORM_SERVICE_TOKEN=token_compartido
+POSTAS_PLATFORM_SOURCE=postas_api
+POSTAS_PLATFORM_TIMEOUT_SECONDS=10
+```
+
+Para extraccion de documentos, `postas_api` consulta `POST /internal/v1/entitlements/check` con `feature_key=document_extraction` antes de llamar a la API IA. Si platform devuelve `allowed=false`, la accion se bloquea y no se llama a `postas_ai_api`. Si hay timeout o error de conexion contra platform, la accion falla cerrada con error controlado.
+
+Cuando la extraccion termina con resultado usable, `postas_api` registra el consumo en `POST /internal/v1/usage/check-and-consume` con `idempotency_key=document-extraction:<document_extraction_uuid>` y metadata de provider/model/tokens/costo si existe. Esta segunda validacion evita registrar consumos por encima de la cuota si hubo extracciones concurrentes.
 
 Para verificar la configuracion dentro del contenedor:
 

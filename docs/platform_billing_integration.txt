@@ -1,0 +1,62 @@
+Feature:
+postas_api integration with postas_platform_api for plan permissions and usage
+
+Classification:
+large
+
+Context reviewed:
+- config/settings.py env var patterns
+- apps/document_extractor/services.py IA orchestration
+- apps/document_extractor/tests.py service test patterns
+- .env-example and README.md environment documentation
+- apps/notifications/services.py provider error handling style
+
+Current behavior:
+postas_api called postas_ai_api directly for document extraction and used local settings for document extraction limits.
+
+Proposed behavior:
+postas_api treats postas_platform_api as the source of truth for plan entitlements and usage. Document extraction checks feature_key=document_extraction before IA work and performs an atomic check-and-consume after a usable final IA response.
+
+Implementation plan:
+1. Add an internal platform billing client with required service headers and controlled errors.
+2. Add platform settings and env examples.
+3. Integrate document extraction entitlement check before upload/IA work.
+4. Register document extraction usage with deterministic idempotency key after successful usable results using check-and-consume to avoid quota races.
+5. Add focused client and document extraction tests.
+6. Update README documentation.
+
+Files changed:
+- apps/platform_billing/client.py
+- apps/platform_billing/apps.py
+- apps/platform_billing/tests.py
+- apps/document_extractor/services.py
+- apps/document_extractor/tests.py
+- config/settings.py
+- .env-example
+- README.md
+- docs/platform_billing_integration.txt
+
+Tests created or updated:
+- apps/platform_billing/tests.py
+- apps/document_extractor/tests.py
+
+Documentation updated:
+- README.md
+- .env-example
+- docs/platform_billing_integration.txt
+
+Checks run:
+- manage.py test apps.document_extractor apps.platform_billing: passed, 18 tests
+- manage.py check: passed
+- manage.py makemigrations --check --dry-run: passed, no changes detected
+
+Risks:
+- Exact platform response fields beyond allowed/detail/message are inferred from the requested contract.
+- Usage idempotency is server-owned; postas_api sends deterministic keys and accepts duplicate 409 responses only when explicitly marked as duplicate/idempotent.
+
+Important notes:
+- No billing tables or local plan catalog were added to postas_api.
+- postas_front and MercadoPago were not modified.
+- Document extraction intentionally uses entitlement check before IA and check-and-consume after the usable IA result so concurrent extractions cannot overrun the platform quota.
+- usage/consume responses must explicitly confirm consumption, return a usage id/object, or indicate duplicate/idempotent replay; otherwise postas_api fails closed.
+- Explicit negative usage fields such as allowed=false or consumed=false are never treated as success, even if the response includes an id.
