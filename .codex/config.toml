@@ -1,0 +1,7 @@
+[mcp_servers.resend]
+type = "http"
+url = "https://resend.com/docs/mcp"
+
+[agents]
+max_threads=4
+max_depth=1

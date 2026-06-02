@@ -12,7 +12,6 @@ __pycache__/
 
 # Local launch/editor/agent config
 run.bat
-.codex/
 .vscode/
 
 # AI tools (solo uso local)
@@ -29,5 +28,4 @@ QODER.md
 .kiro/
 .qoder/
 .github/code-review-graph.instruction.md
-.codex/
 .vscode/
