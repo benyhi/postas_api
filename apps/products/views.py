@@ -1,3 +1,6 @@
+import csv
+
+from django.http import HttpResponse
 from rest_framework import generics, filters, status
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, MultiPartParser
@@ -216,6 +219,52 @@ class ProductImportView(APIView):
         }
         response_status = status.HTTP_400_BAD_REQUEST if result["result"] == "FAILED" else status.HTTP_200_OK
         return Response(payload, status=response_status)
+
+
+@extend_schema(
+    summary="Exportar productos a CSV",
+    description=(
+        "Descarga todos los productos activos del tenant como un archivo CSV compatible con el endpoint de importación. "
+        "Incluye BOM UTF-8 para compatibilidad con Excel."
+    ),
+    tags=["Products"],
+    responses={(200, "text/csv"): OpenApiTypes.BINARY},
+)
+class ProductExportView(APIView):
+    permission_classes = [IsAdminOrOwner]
+
+    def get(self, request):
+        products = (
+            Product.objects.filter(tenant_id=request.tenant_id)
+            .select_related("category")
+            .order_by("name")
+        )
+
+        response = HttpResponse(content_type="text/csv; charset=utf-8")
+        response["Content-Disposition"] = 'attachment; filename="inventario.csv"'
+        response.write("﻿")  # BOM for Excel UTF-8 compatibility
+
+        writer = csv.writer(response)
+        writer.writerow([
+            "nombre", "descripcion", "precio", "costo",
+            "unidad", "stock", "stock_minimo",
+            "codigo_barras", "imagen", "categoria",
+        ])
+        for p in products:
+            writer.writerow([
+                p.name,
+                p.description,
+                str(p.price),
+                str(p.cost),
+                p.unit,
+                str(p.stock),
+                str(p.min_stock),
+                p.barcode,
+                p.image_url,
+                p.category.name if p.category else "",
+            ])
+
+        return response
 
 
 @extend_schema_view(
