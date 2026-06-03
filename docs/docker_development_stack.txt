@@ -1,0 +1,28 @@
+Feature:
+Docker development stack
+
+Summary:
+The Docker Compose stack now starts the Django API in development mode, a local Postgres database, the frontend, and postas_platform_api as the platform service used by billing and legacy AI extraction flows.
+
+Files changed:
+- docker-compose.yml
+- .env-example
+- Makefile
+- docs/docker_development_stack.txt
+
+Tests created or updated:
+- None
+
+Documentation updated:
+- docs/docker_development_stack.txt
+- .env-example
+
+Checks run:
+- docker compose -f D:\benja\proyectos\postas_api\docker-compose.yml config --quiet: passed
+- D:\benja\proyectos\postas_api\env\Scripts\python.exe D:\benja\proyectos\postas_api\manage.py check: passed
+- D:\benja\proyectos\postas_api\env\Scripts\python.exe D:\benja\proyectos\postas_api\manage.py test apps.platform_billing apps.document_extractor: passed
+
+Important notes:
+- postas_platform_api is expected at ../postas_platform_api by default and can be overridden with POSTAS_PLATFORM_PATH.
+- Inside Docker, POSTAS_PLATFORM_API_URL and AI_EXTRACTOR_BASE_URL point to http://postas_platform:8001 because localhost would point back to the Django container.
+- The platform AI provider defaults to mock for Docker development. Set POSTAS_PLATFORM_AI_PROVIDER=google_genai and configure GOOGLE_API_KEY in postas_platform_api/.env when real Gemini extraction is needed.

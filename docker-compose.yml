@@ -3,9 +3,9 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-postas_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postas_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postas_pass}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -22,7 +22,7 @@ services:
     restart: unless-stopped
     command: >
       sh -c "python manage.py migrate --noinput &&
-             gunicorn config.wsgi:application --bind 0.0.0.0:8000"
+             python manage.py runserver 0.0.0.0:8000"
     volumes:
       - .:/app
     ports:
@@ -31,10 +31,57 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      DATABASE_URL: postgres://${POSTGRES_USER:-postas_user}:${POSTGRES_PASSWORD:-postas_pass}@db:5432/${POSTGRES_DB:-postas_db}
+      POSTAS_PLATFORM_API_URL: http://postas_platform:8001
+      POSTAS_PLATFORM_SERVICE_TOKEN: ${POSTAS_PLATFORM_SERVICE_TOKEN:-local-service-token}
+      POSTAS_PLATFORM_SOURCE: ${POSTAS_PLATFORM_SOURCE:-postas_api}
+      AI_EXTRACTOR_BASE_URL: http://postas_platform:8001/api/v1
+      AI_EXTRACTOR_TOKEN: ${AI_EXTRACTOR_TOKEN:-local-ai-token}
+      AI_EXTRACTOR_SOURCE: ${AI_EXTRACTOR_SOURCE:-postas_api}
     depends_on:
       db:
         condition: service_healthy
+      postas_platform:
+        condition: service_healthy
+
+  postas_platform:
+    build:
+      context: "${POSTAS_PLATFORM_PATH:-../postas_platform_api}"
+    restart: unless-stopped
+    working_dir: /app
+    command: >
+      sh -c "python -m alembic upgrade head &&
+             python scripts/seed_billing.py &&
+             uvicorn main:app --host 0.0.0.0 --port 8001 --reload"
+    environment:
+      DATABASE_URL: ${POSTAS_PLATFORM_DATABASE_URL:-sqlite:////app/postas_platform.db}
+      POSTAS_SERVICE_TOKEN: ${POSTAS_PLATFORM_SERVICE_TOKEN:-local-service-token}
+      POSTAS_SERVICE_TOKEN_HEADER: ${POSTAS_SERVICE_TOKEN_HEADER:-X-Postas-Service-Token}
+      POSTAS_SERVICE_SOURCE_HEADER: ${POSTAS_SERVICE_SOURCE_HEADER:-X-Postas-Source}
+      POSTAS_AI_API_TOKEN: ${AI_EXTRACTOR_TOKEN:-local-ai-token}
+      REQUIRE_API_TOKEN: ${POSTAS_PLATFORM_REQUIRE_API_TOKEN:-true}
+      ALLOWED_REQUEST_SOURCES: ${POSTAS_PLATFORM_ALLOWED_REQUEST_SOURCES:-postas_api,postas_ai_api,localhost}
+      AI_PROVIDER: ${POSTAS_PLATFORM_AI_PROVIDER:-mock}
+      FALLBACK_AI_PROVIDER: ${POSTAS_PLATFORM_FALLBACK_AI_PROVIDER:-}
+      MAX_AI_ATTEMPTS: ${POSTAS_PLATFORM_MAX_AI_ATTEMPTS:-1}
+      GOOGLE_MODEL: ${POSTAS_PLATFORM_GOOGLE_MODEL:-gemini-2.5-flash-lite}
+      IMAGE_DOWNLOAD_TIMEOUT_SECONDS: ${POSTAS_PLATFORM_IMAGE_DOWNLOAD_TIMEOUT_SECONDS:-15}
+      MAX_IMAGE_BYTES: ${POSTAS_PLATFORM_MAX_IMAGE_BYTES:-10485760}
+      ACCEPTED_CONFIDENCE_THRESHOLD: ${POSTAS_PLATFORM_ACCEPTED_CONFIDENCE_THRESHOLD:-0.85}
+      MINIMUM_CONFIDENCE_THRESHOLD: ${POSTAS_PLATFORM_MINIMUM_CONFIDENCE_THRESHOLD:-0.60}
+      INPUT_TOKEN_COST_PER_MILLION: ${POSTAS_PLATFORM_INPUT_TOKEN_COST_PER_MILLION:-0}
+      OUTPUT_TOKEN_COST_PER_MILLION: ${POSTAS_PLATFORM_OUTPUT_TOKEN_COST_PER_MILLION:-0}
+      PORT: 8001
+    ports:
+      - "${POSTAS_PLATFORM_PORT:-8001}:8001"
+    volumes:
+      - "${POSTAS_PLATFORM_PATH:-../postas_platform_api}:/app"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/api/v1/health', timeout=2).read()"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
 
   front:
     image: node:22-alpine
