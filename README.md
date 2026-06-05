@@ -771,7 +771,6 @@ Respuesta:
   ]
 }
 ```
-
 ---
 
 ### Notas para el frontend
