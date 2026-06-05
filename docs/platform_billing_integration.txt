@@ -16,6 +16,7 @@ postas_api called postas_ai_api directly for document extraction and used local 
 
 Proposed behavior:
 postas_api treats postas_platform_api as the source of truth for plan entitlements and usage. Document extraction checks feature_key=document_extraction before IA work and performs an atomic check-and-consume after a usable final IA response.
+The frontend reads the tenant billing snapshot through GET /api/v1/billing/current-plan/. The endpoint uses the JWT tenant_id, calls GET /internal/v1/tenants/{tenant_id}/status in postas_platform_api, and returns the plan/subscription/features payload without allowing any write operation. Only the business error subscription_not_found is exposed as 404; internal platform auth/config/connectivity failures are mapped to code=billing_service_unavailable with HTTP 503.
 
 Implementation plan:
 1. Add an internal platform billing client with required service headers and controlled errors.
@@ -27,11 +28,15 @@ Implementation plan:
 
 Files changed:
 - apps/platform_billing/client.py
+- apps/platform_billing/serializers.py
+- apps/platform_billing/views.py
+- apps/platform_billing/urls.py
 - apps/platform_billing/apps.py
 - apps/platform_billing/tests.py
 - apps/document_extractor/services.py
 - apps/document_extractor/tests.py
 - config/settings.py
+- config/urls.py
 - .env-example
 - README.md
 - docs/platform_billing_integration.txt
@@ -56,6 +61,8 @@ Risks:
 
 Important notes:
 - No billing tables or local plan catalog were added to postas_api.
+- The public frontend billing endpoint is read-only and does not accept tenant_id in the request body or query params.
+- Internal service-to-service platform errors are not exposed to the frontend; they are logged and returned as billing_service_unavailable.
 - postas_front and MercadoPago were not modified.
 - Document extraction intentionally uses entitlement check before IA and check-and-consume after the usable IA result so concurrent extractions cannot overrun the platform quota.
 - usage/consume responses must explicitly confirm consumption, return a usage id/object, or indicate duplicate/idempotent replay; otherwise postas_api fails closed.

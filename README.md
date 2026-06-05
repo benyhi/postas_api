@@ -116,6 +116,49 @@ Para extraccion de documentos, `postas_api` consulta `POST /internal/v1/entitlem
 
 Cuando la extraccion termina con resultado usable, `postas_api` registra el consumo en `POST /internal/v1/usage/check-and-consume` con `idempotency_key=document-extraction:<document_extraction_uuid>` y metadata de provider/model/tokens/costo si existe. Esta segunda validacion evita registrar consumos por encima de la cuota si hubo extracciones concurrentes.
 
+Endpoint de lectura para frontend:
+
+```http
+GET /api/v1/billing/current-plan/
+Authorization: Bearer <access_token>
+```
+
+Devuelve el plan actual del tenant autenticado, el estado de suscripcion y el mapa de features con limites y consumos (`enabled`, `limit`, `used`, `remaining`, `reset_period`). El tenant se toma exclusivamente del `tenant_id` del JWT; el frontend no envia ni puede modificar el `tenant_id`.
+
+Respuesta ejemplo:
+
+```json
+{
+  "tenant_id": "00000000-0000-0000-0000-000000000001",
+  "status": "active",
+  "subscription": {
+    "plan": "business_ai",
+    "plan_name": "Business AI",
+    "status": "active",
+    "current_period_start": "2026-06-01T00:00:00Z",
+    "current_period_end": "2026-07-01T00:00:00Z"
+  },
+  "features": {
+    "document_extraction": {
+      "enabled": true,
+      "limit": 100,
+      "used": 12,
+      "remaining": 88,
+      "reset_period": "monthly"
+    },
+    "products": {
+      "enabled": true,
+      "limit": 1000,
+      "used": null,
+      "remaining": null,
+      "reset_period": null
+    }
+  }
+}
+```
+
+Si `postas_platform_api` no encuentra una suscripcion para el tenant, este endpoint devuelve `404` con `detail/code=subscription_not_found`. Si falta `tenant_id` en el JWT, devuelve `400`. Si hay un error interno, de configuracion, auth service-to-service, timeout o conexion contra platform, devuelve `503` con `code=billing_service_unavailable`.
+
 Para verificar la configuracion dentro del contenedor:
 
 ```bash

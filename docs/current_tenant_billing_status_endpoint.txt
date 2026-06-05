@@ -1,0 +1,43 @@
+Feature:
+current tenant billing status endpoint
+
+Summary:
+Implemented a read-only frontend endpoint at GET /api/v1/billing/current-plan/.
+The endpoint reads tenant_id from the authenticated JWT, calls postas_platform_api
+through PlatformBillingClient.get_tenant_status, and returns the platform plan,
+subscription, feature, limit, and usage payload without allowing writes.
+
+Files changed:
+- apps/platform_billing/serializers.py
+- apps/platform_billing/views.py
+- apps/platform_billing/urls.py
+- apps/platform_billing/tests.py
+- config/urls.py
+- config/settings.py
+- README.md
+- docs/platform_billing_integration.txt
+- schema.yml
+
+Tests created or updated:
+- apps/platform_billing/tests.py
+
+Documentation updated:
+- README.md
+- docs/platform_billing_integration.txt
+- docs/current_tenant_billing_status_endpoint.txt
+- schema.yml
+
+Checks run:
+- D:\benja\proyectos\postas_api\env\Scripts\python.exe D:\benja\proyectos\postas_api\manage.py test apps.platform_billing: passed, 12 tests
+- D:\benja\proyectos\postas_api\env\Scripts\python.exe D:\benja\proyectos\postas_api\manage.py spectacular --file D:\benja\proyectos\postas_api\schema.yml: passed
+- D:\benja\proyectos\postas_api\env\Scripts\python.exe D:\benja\proyectos\postas_api\manage.py test apps.platform_billing apps.document_extractor: passed, 24 tests
+- D:\benja\proyectos\postas_api\env\Scripts\python.exe D:\benja\proyectos\postas_api\manage.py check: passed
+- D:\benja\proyectos\postas_api\env\Scripts\python.exe D:\benja\proyectos\postas_api\manage.py makemigrations --check --dry-run: passed
+- git -C D:\benja\proyectos\postas_api diff --check: passed
+
+Important notes:
+- No billing tables or local plan catalog were added to postas_api.
+- The endpoint is authenticated and derives tenant scope only from request.tenant_id.
+- Platform 404 subscription_not_found is returned to the frontend as a read error.
+- Platform auth/config/connectivity failures are logged server-side and returned as 503 billing_service_unavailable.
+- Tests were run with DATABASE_URL=sqlite:///D:/benja/proyectos/postas_api/db.sqlite3 to avoid inherited Postgres test database state.

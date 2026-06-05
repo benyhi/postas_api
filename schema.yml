@@ -179,6 +179,72 @@ paths:
               schema:
                 $ref: '#/components/schemas/TokenRefresh'
           description: ''
+  /api/v1/billing/current-plan/:
+    get:
+      operationId: v1_billing_current_plan_retrieve
+      description: Devuelve el plan actual, estado de suscripcion y consumos/limites
+        de features del tenant autenticado. Es un endpoint solo lectura para el frontend
+        y no modifica datos de billing.
+      summary: Plan y consumos del tenant actual
+      tags:
+      - Billing
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantBillingStatus'
+              examples:
+                Respuesta:
+                  value:
+                    tenant_id: 00000000-0000-0000-0000-000000000001
+                    status: active
+                    subscription:
+                      plan: business_ai
+                      plan_name: Business AI
+                      status: active
+                      current_period_start: '2026-06-01T00:00:00Z'
+                      current_period_end: '2026-07-01T00:00:00Z'
+                    features:
+                      document_extraction:
+                        enabled: true
+                        limit: 100
+                        used: 12
+                        remaining: 88
+                        reset_period: monthly
+                      products:
+                        enabled: true
+                        limit: 1000
+                        used: null
+                        remaining: null
+                        reset_period: null
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingError'
+          description: JWT sin tenant_id.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingError'
+          description: Token faltante o invalido.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingError'
+          description: El tenant no tiene suscripcion registrada en platform.
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingError'
+          description: No se pudo consultar postas_platform_api.
   /api/v1/cashboxes/:
     get:
       operationId: v1_cashboxes_list
@@ -956,6 +1022,25 @@ paths:
       responses:
         '204':
           description: No response body
+  /api/v1/products/export/:
+    get:
+      operationId: v1_products_export_retrieve
+      description: Descarga todos los productos activos del tenant como un archivo
+        CSV compatible con el endpoint de importación. Incluye BOM UTF-8 para compatibilidad
+        con Excel.
+      summary: Exportar productos a CSV
+      tags:
+      - Products
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+          description: ''
   /api/v1/products/import/:
     post:
       operationId: v1_products_import_create
@@ -1108,6 +1193,36 @@ paths:
                       product__name: Coca Cola 500ml
                       total_quantity: 45.0
                       total_revenue: 67500.0
+          description: ''
+  /api/v1/reports/sales/by-date/:
+    get:
+      operationId: v1_reports_sales_by_date_list
+      description: Retorna totales de ventas por cada dia en el rango especificado.
+        Sin filtros, retorna la semana actual (lunes a domingo).
+      summary: Ventas agrupadas por dia
+      parameters:
+      - in: query
+        name: from
+        schema:
+          type: string
+        description: Fecha desde (YYYY-MM-DD)
+      - in: query
+        name: to
+        schema:
+          type: string
+        description: Fecha hasta (YYYY-MM-DD)
+      tags:
+      - Reports
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SalesByDate'
           description: ''
   /api/v1/reports/sales/by-payment/:
     get:
@@ -1694,6 +1809,15 @@ components:
       - timestamp
       - user_username
       - uuid
+    BillingError:
+      type: object
+      properties:
+        detail:
+          type: string
+        code:
+          type: string
+      required:
+      - detail
     CashboxCloseRequest:
       type: object
       properties:
@@ -2742,6 +2866,22 @@ components:
       description: |-
         * `COMPLETED` - Completed
         * `CANCELLED` - Cancelled
+    SalesByDate:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        total:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        count:
+          type: integer
+      required:
+      - count
+      - date
+      - total
     SalesByPaymentReport:
       type: object
       properties:
@@ -2841,6 +2981,47 @@ components:
       required:
       - product_uuid
       - supplier_uuid
+    TenantBillingStatus:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        subscription:
+          $ref: '#/components/schemas/TenantBillingSubscription'
+        features:
+          type: object
+          additionalProperties: {}
+          description: Mapa feature_key -> {enabled, limit, used, remaining, reset_period}.
+            Puede incluir campos adicionales devueltos por postas_platform_api.
+      required:
+      - features
+      - status
+      - subscription
+      - tenant_id
+    TenantBillingSubscription:
+      type: object
+      properties:
+        plan:
+          type: string
+        plan_name:
+          type: string
+        status:
+          type: string
+        current_period_start:
+          type: string
+          format: date-time
+        current_period_end:
+          type: string
+          format: date-time
+      required:
+      - current_period_end
+      - current_period_start
+      - plan
+      - plan_name
+      - status
     TenantConfig:
       type: object
       properties:
@@ -3052,3 +3233,5 @@ tags:
   description: Configuracion del tenant
 - name: DocumentExtractor
   description: Extraccion de productos desde documentos con IA
+- name: Billing
+  description: Plan actual, features y consumos del tenant

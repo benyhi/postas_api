@@ -67,6 +67,9 @@ urlpatterns = [
     # Tenant configuration
     path('api/v1/tenant/', include('apps.tenants.urls')),
 
+    # Billing / plans
+    path('api/v1/billing/', include('apps.platform_billing.urls')),
+
     # Cloud / Storage
     path('api/v1/cloud/', include(cloud_urlpatterns)),
 

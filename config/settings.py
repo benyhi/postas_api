@@ -129,6 +129,7 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Suppliers', 'description': 'CRUD de proveedores y relaciones producto-proveedor'},
         {'name': 'TenantConfig', 'description': 'Configuracion del tenant'},
         {'name': 'DocumentExtractor', 'description': 'Extraccion de productos desde documentos con IA'},
+        {'name': 'Billing', 'description': 'Plan actual, features y consumos del tenant'},
     ],
 }
 

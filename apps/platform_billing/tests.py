@@ -4,8 +4,11 @@ from io import BytesIO
 from unittest.mock import patch
 from urllib import error
 
-from django.test import SimpleTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
+from rest_framework.test import APIClient
+from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.users.models import User
 from .client import PlatformBillingClient, PlatformBillingError
 
 
@@ -166,3 +169,130 @@ class PlatformBillingClientTests(SimpleTestCase):
 
         self.assertEqual(ctx.exception.status_code, 503)
         self.assertIn("POSTAS_PLATFORM_SERVICE_TOKEN", ctx.exception.message)
+
+
+class CurrentTenantBillingStatusEndpointTests(TestCase):
+    def setUp(self):
+        self.tenant_id = uuid.uuid4()
+        self.user = User.objects.create_user(
+            tenant_id=self.tenant_id,
+            username="cashier",
+            email="cashier@example.com",
+            password="cashier1234",
+            role=User.Role.EMPLOYEE,
+        )
+        self.client = APIClient()
+
+    def test_authenticated_user_can_read_current_tenant_plan_and_usage(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._access_token(self.user)}")
+        other_tenant_id = uuid.uuid4()
+        platform_payload = {
+            "tenant_id": str(self.tenant_id),
+            "status": "active",
+            "subscription": {
+                "plan": "business_ai",
+                "plan_name": "Business AI",
+                "status": "active",
+                "current_period_start": "2026-06-01T00:00:00Z",
+                "current_period_end": "2026-07-01T00:00:00Z",
+            },
+            "features": {
+                "document_extraction": {
+                    "enabled": True,
+                    "limit": 100,
+                    "used": 12,
+                    "remaining": 88,
+                    "reset_period": "monthly",
+                },
+                "products": {
+                    "enabled": True,
+                    "limit": 1000,
+                    "used": None,
+                    "remaining": None,
+                    "reset_period": None,
+                },
+            },
+        }
+
+        with patch("apps.platform_billing.views.PlatformBillingClient") as client_class:
+            client_class.return_value.get_tenant_status.return_value = platform_payload
+            response = self.client.get(
+                f"/api/v1/billing/current-plan/?tenant_id={other_tenant_id}"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, platform_payload)
+        client_class.return_value.get_tenant_status.assert_called_once_with(str(self.tenant_id))
+
+    def test_missing_tenant_id_claim_does_not_call_platform(self):
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {self._access_token(self.user, include_tenant=False)}"
+        )
+
+        with patch("apps.platform_billing.views.PlatformBillingClient") as client_class:
+            response = self.client.get("/api/v1/billing/current-plan/")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["detail"], "tenant_id no esta presente en el token.")
+        client_class.assert_not_called()
+
+    def test_unauthenticated_request_does_not_call_platform(self):
+        with patch("apps.platform_billing.views.PlatformBillingClient") as client_class:
+            response = self.client.get("/api/v1/billing/current-plan/")
+
+        self.assertEqual(response.status_code, 401)
+        client_class.assert_not_called()
+
+    def test_platform_subscription_not_found_is_returned_as_read_error(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._access_token(self.user)}")
+
+        with patch("apps.platform_billing.views.PlatformBillingClient") as client_class:
+            client_class.return_value.get_tenant_status.side_effect = PlatformBillingError(
+                "subscription_not_found",
+                status_code=404,
+                response_data={"detail": "subscription_not_found"},
+            )
+            response = self.client.get("/api/v1/billing/current-plan/")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.data["detail"], "subscription_not_found")
+        self.assertEqual(response.data["code"], "subscription_not_found")
+
+    def test_platform_internal_error_is_sanitized_for_frontend(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._access_token(self.user)}")
+
+        with (
+            patch("apps.platform_billing.views.PlatformBillingClient") as client_class,
+            self.assertLogs("apps.platform_billing.views", level="WARNING") as logs,
+        ):
+            client_class.return_value.get_tenant_status.side_effect = PlatformBillingError(
+                "X-Postas-Service-Token invalido",
+                status_code=403,
+                response_data={"detail": "invalid_service_token"},
+            )
+            response = self.client.get("/api/v1/billing/current-plan/")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("status=403", logs.output[0])
+        self.assertEqual(
+            response.data["detail"],
+            "No se pudo consultar el estado de billing del tenant.",
+        )
+        self.assertEqual(response.data["code"], "billing_service_unavailable")
+        self.assertNotIn("invalid_service_token", str(response.data))
+
+    def test_endpoint_is_read_only(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._access_token(self.user)}")
+
+        response = self.client.post("/api/v1/billing/current-plan/", {}, format="json")
+
+        self.assertEqual(response.status_code, 405)
+
+    @staticmethod
+    def _access_token(user, *, include_tenant=True):
+        refresh = RefreshToken.for_user(user)
+        access = refresh.access_token
+        if include_tenant:
+            access["tenant_id"] = str(user.tenant_id)
+        access["role"] = user.role
+        return str(access)
