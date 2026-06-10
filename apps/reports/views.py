@@ -10,9 +10,18 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, inline_serializer
 
+from apps.platform_billing.enforcement import check_billing_entitlement
 from apps.sales.models import Sale, SaleDetail
 from apps.cashbox.models import Cashbox
 from core.permissions.roles import IsAdminOrOwner
+
+
+def _check_report_entitlement(request, feature_key, operation):
+    check_billing_entitlement(
+        request.tenant_id,
+        feature_key,
+        context={"source": "reports", "operation": operation},
+    )
 
 
 def _build_payment_breakdown(sales_qs):
@@ -65,6 +74,7 @@ class DailySalesReportView(APIView):
         ],
     )
     def get(self, request):
+        _check_report_entitlement(request, "basic_reports", "daily_sales")
         qs = Sale.objects.filter(
             tenant_id=request.tenant_id,
             status=Sale.Status.COMPLETED,
@@ -112,6 +122,7 @@ class SalesByPaymentReportView(APIView):
         ],
     )
     def get(self, request):
+        _check_report_entitlement(request, "basic_reports", "sales_by_payment")
         qs = Sale.objects.filter(
             tenant_id=request.tenant_id,
             status=Sale.Status.COMPLETED,
@@ -148,6 +159,7 @@ class TopProductsReportView(APIView):
         ],
     )
     def get(self, request):
+        _check_report_entitlement(request, "advanced_reports", "top_products")
         limit = int(request.query_params.get("limit", 10))
 
         qs = SaleDetail.objects.filter(
@@ -197,6 +209,7 @@ class CashboxSummaryReportView(APIView):
         })},
     )
     def get(self, request):
+        _check_report_entitlement(request, "basic_reports", "cashbox_summary")
         cashbox_id = request.query_params.get("cashbox_id")
 
         if cashbox_id:
@@ -269,6 +282,7 @@ class SalesByDateView(APIView):
         }, many=True)},
     )
     def get(self, request):
+        _check_report_entitlement(request, "basic_reports", "sales_by_date")
         today = timezone.now().date()
         date_from_str = request.query_params.get("from")
         date_to_str = request.query_params.get("to")

@@ -1,5 +1,6 @@
 import uuid
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.core import mail
 from django.test import TestCase, override_settings
@@ -41,6 +42,12 @@ class CashboxEmailNotificationTests(TestCase):
             password="cashier1234",
             role=User.Role.EMPLOYEE,
         )
+        self.billing_patcher = patch("apps.platform_billing.enforcement.PlatformBillingClient")
+        self.billing_client_class = self.billing_patcher.start()
+        self.addCleanup(self.billing_patcher.stop)
+        self.billing_client = self.billing_client_class.return_value
+        self.billing_client.check_entitlement.return_value = {"allowed": True}
+        self.billing_client.check_and_consume.return_value = {"allowed": True, "recorded": True}
 
     def test_service_sends_open_notification_to_tenant_owner(self):
         cashbox = Cashbox.objects.create(
@@ -66,6 +73,18 @@ class CashboxEmailNotificationTests(TestCase):
         self.assertEqual(delivery.provider, EmailDelivery.Provider.DJANGO)
         self.assertEqual(delivery.status, EmailDelivery.Status.SENT)
         self.assertEqual(delivery.notification_type, EmailDelivery.NotificationType.CASHBOX_OPENED)
+        self.billing_client.check_and_consume.assert_called_once()
+        consume_call = self.billing_client.check_and_consume.call_args
+        self.assertEqual(consume_call.args[0], self.tenant_id)
+        self.assertEqual(consume_call.args[1], "cashbox_email_report")
+        self.assertEqual(consume_call.kwargs["external_id"], f"{cashbox.uuid}:opened:manual")
+        self.assertTrue(
+            consume_call.kwargs["idempotency_key"].startswith(
+                f"cashbox-email-report:{cashbox.uuid}:opened:manual:"
+            )
+        )
+        self.assertEqual(consume_call.kwargs["metadata"]["source"], "manual")
+        self.assertEqual(consume_call.kwargs["context"]["notification_source"], "manual")
 
     def test_open_endpoint_sends_notification_automatically(self):
         client = APIClient()
@@ -82,6 +101,39 @@ class CashboxEmailNotificationTests(TestCase):
         self.assertEqual(mail.outbox[0].to, ["notifications@example.com"])
         self.assertIn("Caja abierta", mail.outbox[0].subject)
         self.assertIn("Monto inicial: 1000.00", mail.outbox[0].body)
+        self.billing_client.check_and_consume.assert_called()
+        cashbox = Cashbox.objects.get(tenant_id=self.tenant_id)
+        consume_call = self.billing_client.check_and_consume.call_args
+        self.assertEqual(
+            consume_call.kwargs["idempotency_key"],
+            f"cashbox-email-report:{cashbox.uuid}:opened:automatic",
+        )
+        self.assertEqual(consume_call.kwargs["metadata"]["source"], "automatic")
+        self.assertEqual(consume_call.kwargs["context"]["notification_source"], "automatic")
+
+    def test_open_endpoint_blocks_when_cashbox_limit_is_exceeded(self):
+        self.billing_client.check_entitlement.return_value = {
+            "allowed": False,
+            "reason": "resource_limit_exceeded",
+            "message": "Limite de cajas alcanzado.",
+            "limit": 1,
+            "used": 2,
+            "remaining": 0,
+        }
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._access_token(self.owner)}")
+
+        response = client.post(
+            "/api/v1/cashboxes/open/",
+            {"initial_amount": "1000.00"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.data["code"], "resource_limit_exceeded")
+        self.assertEqual(response.data["feature_key"], "cashboxes")
+        self.assertEqual(Cashbox.objects.filter(tenant_id=self.tenant_id).count(), 0)
+        self.assertEqual(len(mail.outbox), 0)
 
     def test_employee_can_open_and_view_current_cashbox(self):
         client = APIClient()
@@ -162,6 +214,31 @@ class CashboxEmailNotificationTests(TestCase):
         self.assertIn("Monto final", html_body)
         self.assertIn("1300.00", html_body)
         self.assertIn("Diferencia", html_body)
+
+    def test_manual_notification_blocks_when_email_usage_limit_is_exceeded(self):
+        cashbox = Cashbox.objects.create(
+            tenant_id=self.tenant_id,
+            opened_by=self.employee,
+            initial_amount=Decimal("1000.00"),
+        )
+        self.billing_client.check_and_consume.return_value = {
+            "allowed": False,
+            "reason": "quota_exceeded",
+            "message": "Limite de emails de caja alcanzado.",
+            "limit": 1,
+            "used": 1,
+            "remaining": 0,
+        }
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._access_token(self.owner)}")
+
+        response = client.post(f"/api/v1/cashboxes/{cashbox.uuid}/notify-email/")
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.data["code"], "quota_exceeded")
+        self.assertEqual(response.data["feature_key"], "cashbox_email_report")
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertFalse(EmailDelivery.objects.exists())
 
     @staticmethod
     def _access_token(user):

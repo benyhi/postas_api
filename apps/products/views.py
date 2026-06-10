@@ -17,6 +17,7 @@ from apps.products.importer import (
 )
 from apps.products.models import Category, Product
 from apps.products.serializers import CategorySerializer, ProductImportUploadSerializer, ProductSerializer
+from apps.platform_billing.enforcement import check_billing_entitlement
 from core.permissions.roles import IsAdminOrOwner, IsAdminOrOwnerOrReadOnly
 from core.utils.audit import log_action
 
@@ -136,6 +137,13 @@ class ProductListCreateView(generics.ListCreateAPIView):
         return qs
 
     def perform_create(self, serializer):
+        projected_count = Product.objects.filter(tenant_id=self.request.tenant_id).count() + 1
+        check_billing_entitlement(
+            self.request.tenant_id,
+            "products",
+            resource_count=projected_count,
+            context={"source": "products", "operation": "create_product"},
+        )
         product = serializer.save()
         log_action(self.request, "CREATE", "PRODUCT", product.uuid, {
             "name": product.name, "price": str(product.price),
@@ -189,7 +197,28 @@ class ProductImportView(APIView):
         serializer.is_valid(raise_exception=True)
 
         service = ProductImportService()
+        check_billing_entitlement(
+            request.tenant_id,
+            "import_products",
+            context={"source": "products", "operation": "import_products"},
+        )
         try:
+            projection = service.preview_upload(
+                tenant_id=request.tenant_id,
+                upload=serializer.validated_data["file"],
+            )
+            projected_count = Product.objects.filter(tenant_id=request.tenant_id).count() + projection["created"]
+            check_billing_entitlement(
+                request.tenant_id,
+                "products",
+                resource_count=projected_count,
+                context={
+                    "source": "products",
+                    "operation": "import_products",
+                    "projected_new_products": projection["created"],
+                    "projected_active_products": projected_count,
+                },
+            )
             result = service.import_upload(
                 tenant_id=request.tenant_id,
                 upload=serializer.validated_data["file"],
@@ -234,6 +263,11 @@ class ProductExportView(APIView):
     permission_classes = [IsAdminOrOwner]
 
     def get(self, request):
+        check_billing_entitlement(
+            request.tenant_id,
+            "export_products",
+            context={"source": "products", "operation": "export_products"},
+        )
         products = (
             Product.objects.filter(tenant_id=request.tenant_id)
             .select_related("category")

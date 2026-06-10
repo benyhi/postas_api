@@ -25,3 +25,13 @@ class TenantBillingStatusSerializer(serializers.Serializer):
 class BillingErrorSerializer(serializers.Serializer):
     detail = serializers.CharField()
     code = serializers.CharField(required=False)
+
+
+class BillingEnforcementErrorSerializer(serializers.Serializer):
+    detail = serializers.CharField()
+    code = serializers.CharField()
+    feature_key = serializers.CharField()
+    limit = serializers.IntegerField(allow_null=True)
+    used = serializers.IntegerField(allow_null=True)
+    remaining = serializers.IntegerField(allow_null=True)
+    upgrade_required = serializers.BooleanField()

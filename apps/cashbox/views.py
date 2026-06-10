@@ -14,6 +14,7 @@ from apps.cashbox.serializers import (
     CashboxReadSerializer,
 )
 from apps.notifications.cashbox import send_cashbox_notification_email
+from apps.platform_billing.enforcement import check_billing_entitlement
 from core.permissions.roles import IsAdminOrOwner
 from core.utils.audit import log_action
 
@@ -37,6 +38,16 @@ class CashboxOpenView(generics.CreateAPIView):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        projected_count = Cashbox.objects.filter(
+            tenant_id=request.tenant_id,
+            status=Cashbox.Status.OPEN,
+        ).count() + 1
+        check_billing_entitlement(
+            request.tenant_id,
+            "cashboxes",
+            resource_count=projected_count,
+            context={"source": "cashbox", "operation": "open_cashbox"},
+        )
         cashbox = serializer.save()
         log_action(request, "CASHBOX", "CASHBOX", cashbox.uuid, {
             "action": "OPEN", "initial_amount": str(cashbox.initial_amount),
@@ -184,7 +195,7 @@ class CashboxNotifyEmailView(APIView):
             )
 
         try:
-            result = send_cashbox_notification_email(cashbox)
+            result = send_cashbox_notification_email(cashbox, billing_source="manual")
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -217,7 +228,7 @@ class CashboxNotifyEmailView(APIView):
 
 def send_cashbox_notification_email_safely(request, cashbox):
     try:
-        result = send_cashbox_notification_email(cashbox)
+        result = send_cashbox_notification_email(cashbox, billing_source="automatic")
     except ValueError as exc:
         logger.warning(
             "Cashbox email skipped for cashbox %s tenant %s: %s",

@@ -124,6 +124,65 @@ def _row_error(row, field, message, code="invalid"):
 
 
 class ProductImportService:
+    def preview_upload(self, tenant_id, upload):
+        started = time.perf_counter()
+        rows = self._read_upload(upload)
+        if hasattr(upload, "seek"):
+            upload.seek(0)
+
+        created = 0
+        updated = 0
+        errors = []
+        seen_file_keys = {}
+
+        for row in rows:
+            row_number = row["__row__"]
+            product_data, row_errors = self._normalize_product_data(tenant_id, row)
+
+            if not row_errors:
+                row_errors.extend(
+                    self._validate_file_duplicates(
+                        row_number,
+                        product_data,
+                        seen_file_keys,
+                    )
+                )
+
+            if not row_errors:
+                row_errors.extend(
+                    self._preview_category_errors(
+                        tenant_id,
+                        product_data.get("_category_ref"),
+                        row_number,
+                    )
+                )
+
+            match = None
+            if not row_errors:
+                match = self._match_active_product(tenant_id, product_data, row_number)
+                row_errors.extend(match["errors"])
+
+            if row_errors:
+                errors.extend(row_errors)
+                continue
+
+            if match["product"] is None:
+                created += 1
+            else:
+                updated += 1
+            self._remember_file_keys(row_number, product_data, seen_file_keys)
+
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        failed_rows = len({error["row"] for error in errors if error.get("row") is not None})
+        return {
+            "total_rows": len(rows),
+            "created": created,
+            "updated": updated,
+            "failed": failed_rows,
+            "errors": errors,
+            "elapsed_ms": elapsed_ms,
+        }
+
     def import_upload(self, tenant_id, upload):
         started = time.perf_counter()
         rows = self._read_upload(upload)
@@ -540,6 +599,14 @@ class ProductImportService:
         except IntegrityError:
             return Category.objects.get(tenant_id=tenant_id, name=category_name), []
 
+    def _preview_category_errors(self, tenant_id, category_ref, row_number):
+        if not category_ref or not category_ref.get("id"):
+            return []
+        category = Category.objects.filter(uuid=category_ref["id"], tenant_id=tenant_id).first()
+        if category is None:
+            return [_row_error(row_number, "category_id", "Categoria no encontrada para este tenant.", "not_found")]
+        return []
+
     def _validate_file_duplicates(self, row_number, product_data, seen_file_keys):
         errors = []
         for key, field in self._row_unique_keys(product_data):
@@ -563,7 +630,7 @@ class ProductImportService:
             keys.append((f"barcode:{product_data['barcode']}", "barcode"))
         return keys
 
-    def _upsert_product(self, tenant_id, product_data, row_number):
+    def _match_active_product(self, tenant_id, product_data, row_number):
         queryset = Product.all_objects.filter(tenant_id=tenant_id, active=True)
         barcode_match = None
         if product_data["barcode"]:
@@ -573,7 +640,6 @@ class ProductImportService:
         if barcode_match and name_match and barcode_match.uuid != name_match.uuid:
             return {
                 "product": None,
-                "action": None,
                 "match_type": None,
                 "errors": [_row_error(
                     row_number,
@@ -585,6 +651,23 @@ class ProductImportService:
 
         product = barcode_match or name_match
         match_type = "barcode" if barcode_match else "name" if name_match else None
+        return {
+            "product": product,
+            "match_type": match_type,
+            "errors": [],
+        }
+
+    def _upsert_product(self, tenant_id, product_data, row_number):
+        match = self._match_active_product(tenant_id, product_data, row_number)
+        if match["errors"]:
+            return {
+                "product": None,
+                "action": None,
+                "match_type": None,
+                "errors": match["errors"],
+            }
+        product = match["product"]
+        match_type = match["match_type"]
 
         try:
             with transaction.atomic():

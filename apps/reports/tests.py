@@ -1,5 +1,6 @@
 import uuid
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.test import TestCase
 from django.utils import timezone
@@ -36,6 +37,11 @@ class CashboxSummaryReportPermissionTests(TestCase):
         )
         self.client = APIClient()
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._access_token(self.employee)}")
+        self.billing_patcher = patch("apps.platform_billing.enforcement.PlatformBillingClient")
+        self.billing_client_class = self.billing_patcher.start()
+        self.addCleanup(self.billing_patcher.stop)
+        self.billing_client = self.billing_client_class.return_value
+        self.billing_client.check_entitlement.return_value = {"allowed": True}
 
     def test_employee_can_view_open_cashbox_summary_by_id(self):
         cashbox = Cashbox.objects.create(
@@ -79,6 +85,38 @@ class CashboxSummaryReportPermissionTests(TestCase):
         response = self.client.get(f"/api/v1/reports/cashbox/summary/?cashbox_id={cashbox.uuid}")
 
         self.assertEqual(response.status_code, 403)
+
+    def test_advanced_report_blocks_when_feature_is_not_enabled(self):
+        self.billing_client.check_entitlement.return_value = {
+            "allowed": False,
+            "reason": "feature_not_enabled",
+            "message": "Reportes avanzados no habilitados.",
+        }
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._access_token(self.owner)}")
+
+        response = self.client.get("/api/v1/reports/products/top/")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "feature_not_enabled")
+        self.assertEqual(response.data["feature_key"], "advanced_reports")
+
+    def test_cashbox_summary_blocks_when_basic_reports_feature_is_not_enabled(self):
+        Cashbox.objects.create(
+            tenant_id=self.tenant_id,
+            opened_by=self.owner,
+            initial_amount=Decimal("1000.00"),
+        )
+        self.billing_client.check_entitlement.return_value = {
+            "allowed": False,
+            "reason": "feature_not_enabled",
+            "message": "Reportes basicos no habilitados.",
+        }
+
+        response = self.client.get("/api/v1/reports/cashbox/summary/")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "feature_not_enabled")
+        self.assertEqual(response.data["feature_key"], "basic_reports")
 
     @staticmethod
     def _access_token(user):

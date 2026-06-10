@@ -10,6 +10,11 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.users.models import User
 from .client import PlatformBillingClient, PlatformBillingError
+from .enforcement import (
+    BillingEnforcementError,
+    check_and_consume_billing_usage,
+    check_billing_entitlement,
+)
 
 
 class Response:
@@ -24,6 +29,21 @@ class Response:
 
     def read(self):
         return json.dumps(self.body).encode("utf-8")
+
+
+class FakeEnforcementClient:
+    def __init__(self, *, entitlement_response=None, entitlement_error=None, consume_response=None):
+        self.entitlement_response = entitlement_response or {"allowed": True}
+        self.entitlement_error = entitlement_error
+        self.consume_response = consume_response or {"allowed": True, "recorded": True}
+
+    def check_entitlement(self, *args, **kwargs):
+        if self.entitlement_error:
+            raise self.entitlement_error
+        return self.entitlement_response
+
+    def check_and_consume(self, *args, **kwargs):
+        return self.consume_response
 
 
 @override_settings(
@@ -169,6 +189,77 @@ class PlatformBillingClientTests(SimpleTestCase):
 
         self.assertEqual(ctx.exception.status_code, 503)
         self.assertIn("POSTAS_PLATFORM_SERVICE_TOKEN", ctx.exception.message)
+
+
+class BillingEnforcementTests(SimpleTestCase):
+    def test_subscription_denial_maps_to_stable_402_payload(self):
+        client = FakeEnforcementClient(
+            entitlement_response={
+                "allowed": False,
+                "reason": "subscription_expired",
+                "message": "La suscripcion del tenant esta vencida.",
+            }
+        )
+
+        with self.assertRaises(BillingEnforcementError) as ctx:
+            check_billing_entitlement(uuid.uuid4(), "products", client=client)
+
+        self.assertEqual(ctx.exception.status_code, 402)
+        self.assertEqual(ctx.exception.payload["code"], "subscription_expired")
+        self.assertEqual(ctx.exception.payload["feature_key"], "products")
+        self.assertTrue(ctx.exception.payload["upgrade_required"])
+
+    def test_feature_denial_maps_to_stable_403_payload(self):
+        client = FakeEnforcementClient(
+            entitlement_response={
+                "allowed": False,
+                "reason": "feature_not_enabled",
+                "message": "La funcionalidad no esta habilitada.",
+            }
+        )
+
+        with self.assertRaises(BillingEnforcementError) as ctx:
+            check_billing_entitlement(uuid.uuid4(), "advanced_reports", client=client)
+
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.payload["code"], "feature_not_enabled")
+
+    def test_limit_denial_maps_to_stable_429_payload(self):
+        client = FakeEnforcementClient(
+            consume_response={
+                "allowed": False,
+                "reason": "quota_exceeded",
+                "message": "Limite mensual alcanzado.",
+                "limit": 100,
+                "used": 100,
+                "remaining": 0,
+            }
+        )
+
+        with self.assertRaises(BillingEnforcementError) as ctx:
+            check_and_consume_billing_usage(
+                uuid.uuid4(),
+                "pos_sales",
+                idempotency_key="sale:test",
+                client=client,
+            )
+
+        self.assertEqual(ctx.exception.status_code, 429)
+        self.assertEqual(ctx.exception.payload["code"], "quota_exceeded")
+        self.assertEqual(ctx.exception.payload["limit"], 100)
+        self.assertEqual(ctx.exception.payload["used"], 100)
+        self.assertEqual(ctx.exception.payload["remaining"], 0)
+
+    def test_platform_error_maps_to_stable_503_payload(self):
+        client = FakeEnforcementClient(
+            entitlement_error=PlatformBillingError("Timeout", status_code=504)
+        )
+
+        with self.assertRaises(BillingEnforcementError) as ctx:
+            check_billing_entitlement(uuid.uuid4(), "products", client=client)
+
+        self.assertEqual(ctx.exception.status_code, 503)
+        self.assertEqual(ctx.exception.payload["code"], "billing_service_unavailable")
 
 
 class CurrentTenantBillingStatusEndpointTests(TestCase):

@@ -116,6 +116,39 @@ Para extraccion de documentos, `postas_api` consulta `POST /internal/v1/entitlem
 
 Cuando la extraccion termina con resultado usable, `postas_api` registra el consumo en `POST /internal/v1/usage/check-and-consume` con `idempotency_key=document-extraction:<document_extraction_uuid>` y metadata de provider/model/tokens/costo si existe. Esta segunda validacion evita registrar consumos por encima de la cuota si hubo extracciones concurrentes.
 
+El enforcement de billing es explicito por endpoint; no hay middleware global. Los guards viven en `apps.platform_billing.enforcement` y usan fail closed. Si platform no confirma el permiso o no responde por timeout, auth/config o conexion, la accion protegida devuelve `503` con `code=billing_service_unavailable`.
+
+Mapa de guards actuales:
+
+| Flujo | Feature platform | Validacion |
+| --- | --- | --- |
+| Crear producto | `products` | `resource_count = productos_activos + 1` |
+| Importar productos | `import_products` y `products` | Primero valida feature de importacion; luego calcula productos nuevos proyectados antes de escribir y valida el total activo proyectado |
+| Exportar productos | `export_products` | Valida antes de generar el CSV |
+| Abrir caja | `cashboxes` | `resource_count = cajas_abiertas + 1` |
+| Email de caja manual/automatico | `cashbox_email_report` | Usa `check-and-consume` antes de enviar |
+| Crear proveedor | `suppliers` | `resource_count = proveedores_activos + 1` |
+| Crear usuario | `users` | `resource_count = usuarios_activos + 1` |
+| Registrar venta | `pos_sales` | Usa `check-and-consume` dentro de la transaccion con `idempotency_key=sale:<sale_uuid>`; si no confirma, la venta y el stock hacen rollback |
+| Reportes diarios, por fecha, por pago y resumen de caja | `basic_reports` | Valida antes de consultar datos |
+| Top productos | `advanced_reports` | Valida antes de consultar datos |
+
+Respuesta estable de bloqueo:
+
+```json
+{
+  "detail": "Limite de recursos alcanzado para esta funcionalidad.",
+  "code": "resource_limit_exceeded",
+  "feature_key": "products",
+  "limit": 20,
+  "used": 21,
+  "remaining": 0,
+  "upgrade_required": true
+}
+```
+
+Codigos de suscripcion (`subscription_not_found`, `subscription_expired`, `subscription_cancelled`, `subscription_payment_required`, `subscription_inactive`) devuelven `402`. `feature_not_enabled` devuelve `403`. `quota_exceeded` y `resource_limit_exceeded` devuelven `429`.
+
 Endpoint de lectura para frontend:
 
 ```http
@@ -123,7 +156,7 @@ GET /api/v1/billing/current-plan/
 Authorization: Bearer <access_token>
 ```
 
-Devuelve el plan actual del tenant autenticado, el estado de suscripcion y el mapa de features con limites y consumos (`enabled`, `limit`, `used`, `remaining`, `reset_period`). El tenant se toma exclusivamente del `tenant_id` del JWT; el frontend no envia ni puede modificar el `tenant_id`.
+Devuelve el plan actual del tenant autenticado, el estado efectivo de suscripcion y el mapa de features con limites y consumos (`enabled`, `limit`, `used`, `remaining`, `reset_period`). Si `current_period_end` esta vencido, platform devuelve `status=subscription_expired` y las features quedan como no habilitadas para uso efectivo. El tenant se toma exclusivamente del `tenant_id` del JWT; el frontend no envia ni puede modificar el `tenant_id`.
 
 Respuesta ejemplo:
 
@@ -342,7 +375,7 @@ La documentación incluye **ejemplos de request/response**, **filtros** y **pagi
 | **TenantConfig** | `GET/PATCH /api/v1/tenant/config/` | Configuración del tenant actual. Incluye email para notificaciones de caja |
 | **Cashbox** | `POST /open/`, `POST /close/`, `GET /current/`, `GET /`, `GET /{uuid}/`, `POST /{uuid}/notify-email/` | EMPLOYEE puede abrir y ver solo caja actual; ADMIN/OWNER pueden listar/ver cajas |
 | **Sales** | `GET/POST /api/v1/sales/`, `GET /{uuid}/`, `POST /{uuid}/cancel/` | EMPLOYEE puede vender y ver ventas de la caja actual; ADMIN/OWNER ven todo. Filtros: `user_id`, `payment_method`, `from`, `to` |
-| **Reports** | `GET daily/`, `GET by-payment/`, `GET top-products/`, `GET cashbox-summary/` | Reportes con filtros de fechas y paginación |
+| **Reports** | `GET sales/daily/`, `GET sales/by-date/`, `GET sales/by-payment/`, `GET products/top/`, `GET cashbox/summary/` | Reportes con filtros de fechas y enforcement de billing por feature |
 | **Audit** | `GET /api/v1/audit/` | Logs de auditoría. Filtros: `action`, `entity`, `user`, `timestamp` |
 | **Suppliers** | `GET/POST /api/v1/suppliers/`, `GET/PATCH/DELETE /api/v1/suppliers/{uuid}/` | CRUD de proveedores (ADMIN/OWNER). DELETE es soft delete |
 | **Suppliers** | `GET/POST /api/v1/product-suppliers/`, `GET/PATCH/DELETE /api/v1/product-suppliers/{uuid}/` | Historial de relaciones producto-proveedor. Filtros: `product`, `is_current` |

@@ -42,6 +42,8 @@ class DocumentExtractionListCreateView(APIView):
                 metadata=serializer.validated_data.get("metadata") or {},
             )
         except DocumentExtractionError as exc:
+            if exc.payload is not None:
+                return Response(exc.payload, status=exc.status_code)
             if exc.extraction is not None:
                 data = DocumentExtractionResultSerializer(exc.extraction).data
                 return Response(data, status=exc.status_code)

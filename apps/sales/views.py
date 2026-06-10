@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiExample, OpenApiParameter
 
+from apps.platform_billing.enforcement import check_and_consume_billing_usage
 from apps.sales.models import Sale, SaleDetail
 from apps.sales.serializers import SaleCreateSerializer, SaleReadSerializer
 from core.permissions.roles import IsAdminOrOwner
@@ -97,12 +98,28 @@ class SaleListCreateView(generics.ListCreateAPIView):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        sale = serializer.save()
-        log_action(request, "SALE", "SALE", sale.uuid, {
-            "total": str(sale.total),
-            "payment_method": sale.payment_method,
-            "items_count": sale.details.count(),
-        })
+        with transaction.atomic():
+            sale = serializer.save()
+            check_and_consume_billing_usage(
+                request.tenant_id,
+                "pos_sales",
+                amount=1,
+                external_id=sale.uuid,
+                idempotency_key=f"sale:{sale.uuid}",
+                occurred_at=sale.created_at,
+                metadata={
+                    "sale": str(sale.uuid),
+                    "total": str(sale.total),
+                    "payment_method": sale.payment_method,
+                    "items_count": sale.details.count(),
+                },
+                context={"source": "sales", "operation": "create_sale"},
+            )
+            log_action(request, "SALE", "SALE", sale.uuid, {
+                "total": str(sale.total),
+                "payment_method": sale.payment_method,
+                "items_count": sale.details.count(),
+            })
         read_serializer = SaleReadSerializer(sale)
         return Response(read_serializer.data, status=status.HTTP_201_CREATED)
 

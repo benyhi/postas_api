@@ -2360,9 +2360,6 @@ components:
     PatchedProductRequest:
       type: object
       properties:
-        tenant_id:
-          type: string
-          format: uuid
         name:
           type: string
           minLength: 1
@@ -2518,6 +2515,7 @@ components:
         tenant_id:
           type: string
           format: uuid
+          readOnly: true
         name:
           type: string
           maxLength: 200
@@ -2609,9 +2607,6 @@ components:
     ProductRequest:
       type: object
       properties:
-        tenant_id:
-          type: string
-          format: uuid
         name:
           type: string
           minLength: 1
@@ -2654,7 +2649,6 @@ components:
       required:
       - name
       - price
-      - tenant_id
     ProductSupplier:
       type: object
       properties:

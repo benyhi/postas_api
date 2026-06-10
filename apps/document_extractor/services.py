@@ -10,6 +10,11 @@ from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 
 from apps.platform_billing.client import PlatformBillingClient, PlatformBillingError
+from apps.platform_billing.enforcement import (
+    BillingEnforcementError,
+    check_and_consume_billing_usage,
+    check_billing_entitlement,
+)
 from core.cloud.service import get_image_service
 
 from .models import DocumentExtraction, DocumentExtractionStatus
@@ -25,11 +30,13 @@ class DocumentExtractionError(Exception):
         message: str,
         status_code: int = 400,
         extraction: DocumentExtraction | None = None,
+        payload: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
         self.extraction = extraction
+        self.payload = payload
 
 
 class AIExtractorClient:
@@ -156,7 +163,7 @@ class DocumentExtractionService:
     def _check_document_extraction_entitlement(self, tenant_id) -> None:
         resource_count = self._current_monthly_usage(tenant_id)
         try:
-            response = self.platform_client.check_entitlement(
+            check_billing_entitlement(
                 tenant_id,
                 DOCUMENT_EXTRACTION_FEATURE_KEY,
                 amount=1,
@@ -165,25 +172,14 @@ class DocumentExtractionService:
                     "source": "document_extractor",
                     "operation": "extract_from_upload",
                 },
+                client=self.platform_client,
             )
-        except PlatformBillingError as exc:
+        except BillingEnforcementError as exc:
             raise DocumentExtractionError(
-                "No se pudo validar el permiso del plan. Intenta nuevamente.",
-                status_code=_platform_error_status(exc),
+                str(exc.payload["detail"]),
+                status_code=exc.status_code,
+                payload=exc.payload,
             ) from exc
-
-        allowed = response.get("allowed")
-        if allowed is True:
-            return
-        if allowed is False:
-            raise DocumentExtractionError(
-                _entitlement_denied_message(response),
-                status_code=403,
-            )
-        raise DocumentExtractionError(
-            "La plataforma de planes no confirmo el permiso para usar extraccion de documentos.",
-            status_code=503,
-        )
 
     def _current_monthly_usage(self, tenant_id) -> int:
         now = timezone.now()
@@ -302,7 +298,7 @@ class DocumentExtractionService:
 
     def _consume_document_extraction_usage(self, extraction: DocumentExtraction) -> None:
         try:
-            response = self.platform_client.check_and_consume(
+            check_and_consume_billing_usage(
                 extraction.tenant_id,
                 DOCUMENT_EXTRACTION_FEATURE_KEY,
                 amount=1,
@@ -314,22 +310,15 @@ class DocumentExtractionService:
                     "source": "document_extractor",
                     "operation": "consume_after_successful_extraction",
                 },
+                client=self.platform_client,
             )
-        except PlatformBillingError as exc:
-            if _is_duplicate_usage_response(exc):
-                return
+        except BillingEnforcementError as exc:
             raise DocumentExtractionError(
-                "No se pudo registrar el consumo del plan. Intenta nuevamente.",
-                status_code=_platform_error_status(exc),
+                str(exc.payload["detail"]),
+                status_code=exc.status_code,
                 extraction=extraction,
+                payload=exc.payload,
             ) from exc
-        if _is_confirmed_usage_response(response):
-            return
-        raise DocumentExtractionError(
-            _usage_consume_failure_message(response),
-            status_code=_usage_consume_failure_status(response),
-            extraction=extraction,
-        )
 
     @staticmethod
     def _should_consume_platform_usage(extraction: DocumentExtraction) -> bool:

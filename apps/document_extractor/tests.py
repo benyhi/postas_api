@@ -50,7 +50,7 @@ class FakePlatformClient:
     ):
         self.entitlement_response = entitlement_response or {"allowed": True}
         self.entitlement_error = entitlement_error
-        self.consume_response = consume_response or {"consumed": True}
+        self.consume_response = consume_response or {"allowed": True, "recorded": True}
         self.consume_error = consume_error
         self.entitlement_calls = []
         self.consume_calls = []
@@ -171,6 +171,7 @@ class DocumentExtractionServiceTests(TestCase):
         platform_client = FakePlatformClient(
             entitlement_response={
                 "allowed": False,
+                "reason": "feature_not_enabled",
                 "message": "Tu plan no incluye extraccion de documentos.",
             }
         )
@@ -187,6 +188,7 @@ class DocumentExtractionServiceTests(TestCase):
 
         self.assertEqual(ctx.exception.status_code, 403)
         self.assertEqual(ctx.exception.message, "Tu plan no incluye extraccion de documentos.")
+        self.assertEqual(ctx.exception.payload["code"], "feature_not_enabled")
         self.assertEqual(client.calls, 0)
         image_service.assert_not_called()
         self.assertEqual(DocumentExtraction.objects.count(), 0)
@@ -209,8 +211,8 @@ class DocumentExtractionServiceTests(TestCase):
                 image_file=image,
             )
 
-        self.assertEqual(ctx.exception.status_code, 504)
-        self.assertIn("permiso del plan", ctx.exception.message)
+        self.assertEqual(ctx.exception.status_code, 503)
+        self.assertEqual(ctx.exception.payload["code"], "billing_service_unavailable")
         self.assertEqual(client.calls, 0)
         self.assertEqual(DocumentExtraction.objects.count(), 0)
 
@@ -322,7 +324,8 @@ class DocumentExtractionServiceTests(TestCase):
         extraction = ctx.exception.extraction
         self.assertIsNotNone(extraction)
         extraction.refresh_from_db()
-        self.assertEqual(ctx.exception.status_code, 502)
+        self.assertEqual(ctx.exception.status_code, 503)
+        self.assertEqual(ctx.exception.payload["code"], "billing_service_unavailable")
         self.assertEqual(
             ctx.exception.message,
             "No se pudo registrar el consumo del plan. Intenta nuevamente.",
@@ -340,6 +343,7 @@ class DocumentExtractionServiceTests(TestCase):
             consume_response={
                 "consumed": False,
                 "allowed": False,
+                "reason": "quota_exceeded",
                 "message": "Limite mensual de extracciones alcanzado.",
             }
         )
@@ -380,6 +384,7 @@ class DocumentExtractionServiceTests(TestCase):
             consume_response={
                 "consumed": False,
                 "allowed": False,
+                "reason": "quota_exceeded",
                 "usage_id": str(uuid.uuid4()),
                 "message": "Limite mensual de extracciones alcanzado.",
             }

@@ -8,6 +8,7 @@ from rest_framework.permissions import AllowAny
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiExample
 
 from apps.notifications.password_reset import send_password_reset_email
+from apps.platform_billing.enforcement import check_billing_entitlement
 from apps.users.models import User
 from apps.users.serializers import UserSerializer, UserReadSerializer
 from core.permissions.roles import IsOwner
@@ -50,6 +51,13 @@ class UserListCreateView(generics.ListCreateAPIView):
         return User.objects.filter(tenant_id=self.request.tenant_id)
 
     def perform_create(self, serializer):
+        projected_count = User.objects.filter(tenant_id=self.request.tenant_id).count() + 1
+        check_billing_entitlement(
+            self.request.tenant_id,
+            "users",
+            resource_count=projected_count,
+            context={"source": "users", "operation": "create_user"},
+        )
         user = serializer.save()
         log_action(self.request, "CREATE", "USER", user.uuid, {
             "username": user.username, "role": user.role,

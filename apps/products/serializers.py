@@ -31,13 +31,13 @@ class ProductSerializer(serializers.ModelSerializer):
             "barcode", "image_url", "category", "category_id", "active",
             "current_suppliers", "created_at", "updated_at",
         ]
+        read_only_fields = ["uuid", "tenant_id", "created_at", "updated_at"]
 
     def get_current_suppliers(self, obj):
         return [
             {"uuid": str(s.uuid), "name": s.name}
             for s in obj.current_suppliers
         ]
-        read_only_fields = ["uuid", "tenant_id", "created_at", "updated_at"]
 
     def validate_category_id(self, value):
         if value is None:

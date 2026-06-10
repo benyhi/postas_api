@@ -1,9 +1,12 @@
+import uuid
+
 from django.utils import timezone
 
 from apps.cashbox.models import Cashbox
 from apps.notifications.models import EmailDelivery
 from apps.notifications.rendering import render_notification
 from apps.notifications.services import send_email
+from apps.platform_billing.enforcement import check_and_consume_billing_usage
 from apps.tenants.models import TenantConfig
 
 
@@ -18,9 +21,10 @@ def get_cashbox_notification_recipients(tenant_id):
     return [config.notification_email]
 
 
-def send_cashbox_notification_email(cashbox):
+def send_cashbox_notification_email(cashbox, *, billing_source="manual"):
     recipients = get_cashbox_notification_recipients(cashbox.tenant_id)
     event = "closed" if cashbox.status == Cashbox.Status.CLOSED else "opened"
+    _consume_cashbox_email_report(cashbox, event, billing_source)
     subject = _cashbox_subject(event)
     text_body, html_body = _cashbox_bodies(cashbox, event)
 
@@ -48,6 +52,32 @@ def send_cashbox_notification_email(cashbox):
         "delivery_uuid": result["delivery_uuid"],
         "estimated_cost_usd": result["estimated_cost_usd"],
     }
+
+
+def _consume_cashbox_email_report(cashbox, event, billing_source):
+    if billing_source == "automatic":
+        idempotency_key = f"cashbox-email-report:{cashbox.uuid}:{event}:automatic"
+    else:
+        idempotency_key = f"cashbox-email-report:{cashbox.uuid}:{event}:manual:{uuid.uuid4()}"
+
+    check_and_consume_billing_usage(
+        cashbox.tenant_id,
+        "cashbox_email_report",
+        amount=1,
+        external_id=f"{cashbox.uuid}:{event}:{billing_source}",
+        idempotency_key=idempotency_key,
+        occurred_at=timezone.now(),
+        metadata={
+            "cashbox": str(cashbox.uuid),
+            "event": event,
+            "source": billing_source,
+        },
+        context={
+            "source": "cashbox",
+            "operation": "send_cashbox_notification_email",
+            "notification_source": billing_source,
+        },
+    )
 
 
 def _cashbox_subject(event):

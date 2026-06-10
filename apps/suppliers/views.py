@@ -10,6 +10,7 @@ from apps.suppliers.serializers import (
     SwitchSupplierSerializer,
 )
 from apps.suppliers.services import switch_supplier
+from apps.platform_billing.enforcement import check_billing_entitlement
 from core.permissions.roles import IsAdminOrOwner
 from core.utils.audit import log_action
 
@@ -30,6 +31,13 @@ class SupplierListCreateView(generics.ListCreateAPIView):
         return Supplier.objects.filter(tenant_id=self.request.tenant_id)
 
     def perform_create(self, serializer):
+        projected_count = Supplier.objects.filter(tenant_id=self.request.tenant_id).count() + 1
+        check_billing_entitlement(
+            self.request.tenant_id,
+            "suppliers",
+            resource_count=projected_count,
+            context={"source": "suppliers", "operation": "create_supplier"},
+        )
         supplier = serializer.save()
         log_action(self.request, "CREATE", "SUPPLIER", supplier.uuid, {"name": supplier.name})
 

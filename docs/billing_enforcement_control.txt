@@ -1,0 +1,120 @@
+Feature:
+Billing Enforcement y Control de Usos
+
+Classification:
+large
+
+Context reviewed:
+- AGENTS.md
+- apps/platform_billing/client.py, views.py, serializers.py, tests.py
+- apps/document_extractor/services.py, views.py, tests.py
+- apps/products/views.py, importer.py, serializers.py, tests.py
+- apps/cashbox/views.py, apps/notifications/cashbox.py, tests.py
+- apps/suppliers/views.py, tests.py
+- apps/users/views.py, tests.py
+- apps/sales/views.py, serializers.py, tests.py
+- apps/reports/views.py, tests.py
+- D:/benja/proyectos/postas_platform_api/app/billing/service.py, seed.py, tests/test_billing.py
+
+Current behavior:
+postas_api already had a PlatformBillingClient and document_extractor checked document_extraction before IA work. Other product, cashbox, supplier, user, sale and report flows did not enforce platform plan limits or usage. Platform collapsed inactive subscription statuses into subscription_inactive and did not deny expired current_period_end with a specific code.
+
+Proposed behavior:
+postas_platform_api remains the source of truth for plan catalog, subscriptions and usage. postas_api performs explicit endpoint-level guards through apps.platform_billing.enforcement. The policy is fail closed: protected writes/reports do not proceed when platform denies or when platform is unavailable.
+
+Implementation plan:
+1. Classify platform subscription denial reasons in BillingService._check_entitlement using existing TenantSubscription fields.
+2. Add reusable postas_api helpers for entitlement checks, check-and-consume, stable error payloads and status-code mapping.
+3. Apply guards only in protected endpoints/flows, not as global middleware.
+4. Keep sales usage inside the transaction so billing failure rolls back sale, details and stock.
+5. Preview product imports before writing to calculate projected new products.
+6. Update focused tests, README and OpenAPI schema.
+
+Files changed:
+- D:/benja/proyectos/postas_platform_api/app/billing/service.py
+- D:/benja/proyectos/postas_platform_api/tests/test_billing.py
+- apps/platform_billing/enforcement.py
+- apps/platform_billing/serializers.py
+- apps/platform_billing/tests.py
+- apps/products/views.py
+- apps/products/importer.py
+- apps/products/serializers.py
+- apps/products/tests.py
+- apps/cashbox/views.py
+- apps/notifications/cashbox.py
+- apps/cashbox/tests.py
+- apps/suppliers/views.py
+- apps/suppliers/tests.py
+- apps/users/views.py
+- apps/users/tests.py
+- apps/sales/views.py
+- apps/sales/tests.py
+- apps/reports/views.py
+- apps/reports/tests.py
+- apps/document_extractor/services.py
+- apps/document_extractor/views.py
+- apps/document_extractor/tests.py
+- README.md
+- docs/billing_enforcement_control.txt
+- schema.yml
+
+Tests created or updated:
+- D:/benja/proyectos/postas_platform_api/tests/test_billing.py
+- apps/platform_billing/tests.py
+- apps/products/tests.py
+- apps/cashbox/tests.py
+- apps/suppliers/tests.py
+- apps/users/tests.py
+- apps/sales/tests.py
+- apps/reports/tests.py
+- apps/document_extractor/tests.py
+
+Documentation updated:
+- README.md
+- docs/billing_enforcement_control.txt
+- schema.yml
+
+Operational contract:
+- 402: subscription_not_found, subscription_expired, subscription_cancelled, subscription_payment_required, subscription_inactive.
+- 403: feature_not_enabled.
+- 429: quota_exceeded, resource_limit_exceeded.
+- 503: billing_service_unavailable for timeout, service auth/config errors, connectivity errors or unconfirmed platform responses.
+
+Stable error body:
+- detail
+- code
+- feature_key
+- limit
+- used
+- remaining
+- upgrade_required
+
+Endpoint guards:
+- POST /api/v1/products/: products with productos_activos + 1.
+- POST /api/v1/products/import/: import_products, then products with active products plus projected new products before writing.
+- GET /api/v1/products/export/: export_products before generating the CSV.
+- POST /api/v1/cashboxes/open/: cashboxes with cajas_abiertas + 1.
+- POST /api/v1/cashboxes/{uuid}/notify-email/ and automatic cashbox notifications: cashbox_email_report check-and-consume before sending.
+- POST /api/v1/suppliers/: suppliers with proveedores_activos + 1.
+- POST /api/v1/users/: users with usuarios_activos + 1.
+- POST /api/v1/sales/: pos_sales check-and-consume inside the sale transaction with sale:<sale_uuid>.
+- Reports daily, by-date, by-payment and cashbox summary: basic_reports.
+- Report top products: advanced_reports.
+- Document extraction: document_extraction check before IA and check-and-consume after usable result.
+- GET /api/v1/billing/current-plan/: read-only snapshot. Platform returns effective subscription status; expired periods surface as subscription_expired and features are disabled for effective access.
+
+Checks run:
+- D:/benja/proyectos/postas_platform_api/env/Scripts/python.exe -m pytest -q D:/benja/proyectos/postas_platform_api/tests/test_billing.py: passed, 19 tests
+- DATABASE_URL=sqlite:///D:/benja/proyectos/postas_api/db.sqlite3 manage.py test apps.platform_billing apps.products apps.cashbox apps.suppliers apps.users apps.sales apps.reports apps.document_extractor: passed, 73 tests
+- manage.py check: passed
+- DATABASE_URL=sqlite:///D:/benja/proyectos/postas_api/db.sqlite3 manage.py makemigrations --check --dry-run: passed, no changes detected
+- DATABASE_URL=sqlite:///D:/benja/proyectos/postas_api/db.sqlite3 manage.py spectacular --file schema.yml: passed with existing drf-spectacular APIView serializer warnings
+
+Risks:
+- Cashbox email usage is consumed before the email provider call so fail-closed prevents unentitled sends, but a provider failure after consumption can still count as an attempted report.
+- Manual cashbox email sends use a unique idempotency key per request because the endpoint has no client-provided idempotency key.
+- Resource-limit checks are pre-write checks against platform plus local counts. They do not add a local reservation table; high-contention tenants may still need platform-side resource reservations later.
+
+Important notes:
+- No new models, migrations or public endpoints were added.
+- Read-only endpoints such as product list/detail, sales list/detail and billing current-plan remain usable without extra feature checks.

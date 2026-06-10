@@ -1,12 +1,14 @@
 import uuid
 from decimal import Decimal
 from io import BytesIO
+from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.platform_billing.client import PlatformBillingError
 from apps.products.importer import MAX_UPLOAD_BYTES
 from apps.products.models import Category, Product
 from apps.users.models import User
@@ -58,10 +60,12 @@ class ProductPermissionTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_employee_can_list_products(self):
-        response = self.client.get("/api/v1/products/")
+        with patch("apps.platform_billing.enforcement.PlatformBillingClient") as client_class:
+            response = self.client.get("/api/v1/products/")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["count"], 1)
+        client_class.assert_not_called()
 
     def test_employee_can_retrieve_product(self):
         response = self.client.get(f"/api/v1/products/{self.product.uuid}/")
@@ -111,6 +115,11 @@ class ProductImportTests(TestCase):
         )
         self.client = APIClient()
         self.authenticate(self.admin)
+        self.billing_patcher = patch("apps.platform_billing.enforcement.PlatformBillingClient")
+        self.billing_client_class = self.billing_patcher.start()
+        self.addCleanup(self.billing_patcher.stop)
+        self.billing_client = self.billing_client_class.return_value
+        self.billing_client.check_entitlement.return_value = {"allowed": True}
 
     def test_admin_imports_csv_and_creates_products(self):
         response = self.client.post(
@@ -380,6 +389,44 @@ class ProductImportTests(TestCase):
 
         self.assertEqual(response.status_code, 403)
 
+    def test_import_projects_new_products_and_blocks_before_writing_when_limit_exceeded(self):
+        Product.objects.create(
+            tenant_id=self.tenant_id,
+            name="Producto existente",
+            price=Decimal("100.00"),
+            barcode="111",
+        )
+        self.billing_client.check_entitlement.side_effect = [
+            {"allowed": True},
+            {
+                "allowed": False,
+                "reason": "resource_limit_exceeded",
+                "message": "Limite de productos alcanzado.",
+                "limit": 2,
+                "used": 3,
+                "remaining": 0,
+            },
+        ]
+
+        response = self.client.post(
+            "/api/v1/products/import/",
+            {"file": self.csv_file(
+                "name,price,barcode\n"
+                "Producto existente actualizado,150.00,111\n"
+                "Producto nuevo A,200.00,222\n"
+                "Producto nuevo B,300.00,333\n"
+            )},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.data["code"], "resource_limit_exceeded")
+        self.assertEqual(Product.objects.filter(tenant_id=self.tenant_id).count(), 1)
+        self.assertEqual(
+            self.billing_client.check_entitlement.call_args_list[1].kwargs["resource_count"],
+            3,
+        )
+
     def authenticate(self, user):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.access_token(user)}")
 
@@ -390,6 +437,113 @@ class ProductImportTests(TestCase):
             content.encode("utf-8"),
             content_type="text/csv",
         )
+
+    @staticmethod
+    def access_token(user):
+        refresh = RefreshToken.for_user(user)
+        access = refresh.access_token
+        access["tenant_id"] = str(user.tenant_id)
+        access["role"] = user.role
+        return str(access)
+
+
+class ProductBillingEnforcementTests(TestCase):
+    def setUp(self):
+        self.tenant_id = uuid.uuid4()
+        self.admin = User.objects.create_user(
+            tenant_id=self.tenant_id,
+            username="product_admin",
+            email="product-admin@example.com",
+            password="admin1234",
+            role=User.Role.ADMIN,
+        )
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.access_token(self.admin)}")
+
+    def test_create_product_blocks_when_resource_limit_is_exceeded(self):
+        with patch("apps.platform_billing.enforcement.PlatformBillingClient") as client_class:
+            client_class.return_value.check_entitlement.return_value = {
+                "allowed": False,
+                "reason": "resource_limit_exceeded",
+                "message": "Limite de productos alcanzado.",
+                "limit": 20,
+                "used": 21,
+                "remaining": 0,
+            }
+            response = self.client.post(
+                "/api/v1/products/",
+                {
+                    "name": "Sprite 500ml",
+                    "price": "1500.00",
+                    "cost": "900.00",
+                    "stock": "10.000",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.data["code"], "resource_limit_exceeded")
+        self.assertEqual(response.data["feature_key"], "products")
+        self.assertFalse(Product.objects.filter(tenant_id=self.tenant_id, name="Sprite 500ml").exists())
+
+    def test_create_product_blocks_expired_subscription_with_402(self):
+        with patch("apps.platform_billing.enforcement.PlatformBillingClient") as client_class:
+            client_class.return_value.check_entitlement.return_value = {
+                "allowed": False,
+                "reason": "subscription_expired",
+                "message": "La suscripcion esta vencida.",
+            }
+            response = self.client.post(
+                "/api/v1/products/",
+                {
+                    "name": "Fanta 500ml",
+                    "price": "1500.00",
+                    "cost": "900.00",
+                    "stock": "10.000",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 402)
+        self.assertEqual(response.data["code"], "subscription_expired")
+
+    def test_create_product_blocks_platform_failure_with_503(self):
+        with patch("apps.platform_billing.enforcement.PlatformBillingClient") as client_class:
+            client_class.return_value.check_entitlement.side_effect = PlatformBillingError(
+                "Timeout consultando platform.",
+                status_code=504,
+            )
+            response = self.client.post(
+                "/api/v1/products/",
+                {
+                    "name": "Pepsi 500ml",
+                    "price": "1500.00",
+                    "cost": "900.00",
+                    "stock": "10.000",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.data["code"], "billing_service_unavailable")
+
+    def test_export_products_blocks_when_feature_is_not_enabled(self):
+        Product.objects.create(
+            tenant_id=self.tenant_id,
+            name="Producto exportable",
+            price=Decimal("100.00"),
+        )
+        with patch("apps.platform_billing.enforcement.PlatformBillingClient") as client_class:
+            client_class.return_value.check_entitlement.return_value = {
+                "allowed": False,
+                "reason": "feature_not_enabled",
+                "message": "Exportacion de productos no habilitada.",
+            }
+            response = self.client.get("/api/v1/products/export/")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "feature_not_enabled")
+        self.assertEqual(response.data["feature_key"], "export_products")
 
     @staticmethod
     def access_token(user):
