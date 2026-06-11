@@ -276,6 +276,7 @@ python manage.py test
 | `python manage.py collectstatic` | Recolectar archivos estáticos |
 | `python manage.py createsuperuser` | Crear usuario administrador |
 | `python manage.py test` | Ejecutar tests |
+| `python manage.py create_tenants <cantidad>` | Crear tenants con UUIDs consecutivos |
 | `python manage.py create_test_users` | Crear usuarios de prueba (ver abajo) |
 | `python manage.py seed_data` | Poblar la DB con datos ficticios |
 | `python manage.py reset_db` | Resetear la base de datos |
@@ -283,6 +284,31 @@ python manage.py test
 ---
 
 ## 🧪 Scripts de prueba
+
+### Crear tenants consecutivos
+
+Crea una cantidad configurable de tenants usando UUIDs consecutivos al mayor `Tenant.uuid` existente. Si no hay tenants, empieza en `00000000000000000000000000000001`.
+
+```bash
+python manage.py create_tenants 3
+```
+
+Ejemplo de UUIDs generados:
+
+```txt
+00000000000000000000000000000001
+00000000000000000000000000000002
+00000000000000000000000000000003
+```
+
+Opciones:
+
+```bash
+python manage.py create_tenants 10 --dry-run
+python manage.py create_tenants 10 --name-prefix "Cliente"
+```
+
+`--dry-run` muestra los tenants que se crearian sin escribir en la base. Mas detalles operativos: `docs/create_tenants.txt`.
 
 ### Crear usuarios de prueba
 

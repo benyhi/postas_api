@@ -1,0 +1,28 @@
+Feature:
+create_tenants management command
+
+Summary:
+Added a Django management command that creates a configurable number of Tenant rows using consecutive UUID integer values. The command starts at one greater than the highest existing Tenant.uuid value, or 1 when there are no tenants.
+
+Files changed:
+- README.md
+- apps/tenants/management/__init__.py
+- apps/tenants/management/commands/__init__.py
+- apps/tenants/management/commands/create_tenants.py
+- apps/tenants/tests.py
+- docs/create_tenants.txt
+
+Tests created or updated:
+- apps/tenants/tests.py
+
+Documentation updated:
+- README.md
+- docs/create_tenants.txt
+
+Checks run:
+- $env:DATABASE_URL='sqlite:///D:/benja/proyectos/postas_api/db.sqlite3'; & D:\benja\proyectos\postas_api\env\Scripts\python.exe D:\benja\proyectos\postas_api\manage.py test apps.tenants.tests
+- $env:DATABASE_URL='sqlite:///D:/benja/proyectos/postas_api/db.sqlite3'; & D:\benja\proyectos\postas_api\env\Scripts\python.exe D:\benja\proyectos\postas_api\manage.py check
+
+Important notes:
+- Run with: python manage.py create_tenants <count>
+- Use --dry-run to preview without writing tenants.
