@@ -81,6 +81,9 @@ POSTAS_PLATFORM_API_URL=http://localhost:8001
 POSTAS_PLATFORM_SERVICE_TOKEN=token_compartido
 POSTAS_PLATFORM_SOURCE=postas_api
 POSTAS_PLATFORM_TIMEOUT_SECONDS=10
+POSTAS_PLATFORM_REQUIRE_TLS=True
+ARCA_OUTBOX_POLL_SECONDS=5
+ARCA_OUTBOX_BATCH_SIZE=20
 ```
 
 > ⚠️ **Nunca subas el archivo `.env` al repositorio.** Asegurate de que esté en `.gitignore`.
@@ -117,6 +120,33 @@ Para extraccion de documentos, `postas_api` consulta `POST /internal/v1/entitlem
 Cuando la extraccion termina con resultado usable, `postas_api` registra el consumo en `POST /internal/v1/usage/check-and-consume` con `idempotency_key=document-extraction:<document_extraction_uuid>` y metadata de provider/model/tokens/costo si existe. Esta segunda validacion evita registrar consumos por encima de la cuota si hubo extracciones concurrentes.
 
 El enforcement de billing es explicito por endpoint; no hay middleware global. Los guards viven en `apps.platform_billing.enforcement` y usan fail closed. Si platform no confirma el permiso o no responde por timeout, auth/config o conexion, la accion protegida devuelve `503` con `code=billing_service_unavailable`.
+
+### Facturacion ARCA
+
+La API publica vive bajo `/api/v1/arca/`. Las credenciales se envian a Platform
+y nunca se persisten ni se devuelven desde `postas_api`.
+
+- `GET|PUT|DELETE /api/v1/arca/configuration/`: solo OWNER.
+- `POST /api/v1/arca/invoices/`: cualquier usuario autenticado.
+- `POST /api/v1/arca/invoices/explicit/`: cualquier usuario autenticado.
+- `GET /api/v1/arca/invoices/by-external-id/{external_id}/`: emisor, ADMIN u OWNER.
+- `GET /api/v1/arca/invoices/fiscal/`: ADMIN u OWNER.
+- `GET /api/v1/arca/invoices/last-voucher/`: ADMIN u OWNER.
+
+Si `automatic_invoicing_enabled` esta activo, la venta y su solicitud fiscal se
+guardan en la misma transaccion. El envio es asincronico y una caida fiscal no
+revierte la venta. Ejecutar el worker durable con:
+
+```bash
+.\env\Scripts\python.exe manage.py run_arca_outbox_worker
+```
+
+El comando del worker falla cerrado si la base no es PostgreSQL.
+
+El ambiente queda fijado en el snapshot de la outbox. Cambiar la configuracion
+del tenant no mueve solicitudes existentes entre homologacion y produccion.
+La automatizacion requiere un perfil validado con concepto Productos. Docker
+Compose inicia tanto `arca_outbox_worker` como `postas_platform_arca_worker`.
 
 Mapa de guards actuales:
 

@@ -83,6 +83,7 @@ INSTALLED_APPS = [
     'apps.notifications',
     'apps.document_extractor',
     'apps.platform_billing',
+    'apps.arca',
 ]
 
 MIDDLEWARE = [
@@ -251,6 +252,9 @@ POSTAS_PLATFORM_API_URL = os.getenv("POSTAS_PLATFORM_API_URL", "http://localhost
 POSTAS_PLATFORM_SERVICE_TOKEN = os.getenv("POSTAS_PLATFORM_SERVICE_TOKEN", "")
 POSTAS_PLATFORM_SOURCE = os.getenv("POSTAS_PLATFORM_SOURCE", "postas_api")
 POSTAS_PLATFORM_TIMEOUT_SECONDS = int(os.getenv("POSTAS_PLATFORM_TIMEOUT_SECONDS", "10"))
+POSTAS_PLATFORM_REQUIRE_TLS = env_bool("POSTAS_PLATFORM_REQUIRE_TLS", "True")
+ARCA_OUTBOX_POLL_SECONDS = float(os.getenv("ARCA_OUTBOX_POLL_SECONDS", "5"))
+ARCA_OUTBOX_BATCH_SIZE = int(os.getenv("ARCA_OUTBOX_BATCH_SIZE", "20"))
 
 # Cloudflare R2 / S3
 R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "")

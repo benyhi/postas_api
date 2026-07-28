@@ -1,0 +1,59 @@
+Feature:
+Servicio ARCA multi-tenant con facturacion automatica
+
+Classification:
+large
+
+Context reviewed:
+- apps/tenants y permisos OWNER
+- apps/sales y su transaccion de confirmacion
+- apps/platform_billing y cliente interno fail closed
+- postas_platform_api como fuente de verdad fiscal
+
+Current behavior:
+TenantConfig controla la automatizacion y el ambiente. La venta y FiscalOutboxRequest se confirman en una misma transaccion; el worker entrega el snapshot a Platform sin bloquear la venta.
+
+Proposed behavior:
+Implementado. La API publica deriva tenant y actor del JWT, exige OWNER para configuracion y conserva el ambiente original en cada solicitud.
+
+Implementation plan:
+1. Agregar preferencias ARCA a TenantConfig.
+2. Crear FiscalOutboxRequest y su worker durable.
+3. Agregar cliente Platform y endpoints publicos con permisos tenant-scoped.
+4. Incluir estado e identificador fiscal en las respuestas de venta.
+5. Probar permisos, snapshot, rollback, reintentos y aislamiento.
+
+Files changed:
+- apps/arca/
+- apps/sales/serializers.py
+- apps/tenants/
+- apps/platform_billing/client.py
+- config/settings.py
+- config/urls.py
+- docker-compose.yml
+- schema.yml
+
+Tests created or updated:
+- apps/arca/tests.py
+- apps/platform_billing/tests.py
+
+Documentation updated:
+- README.md
+- .env-example
+- docs/arca_invoicing_service.txt
+
+Checks run:
+- manage.py check: passed
+- makemigrations --check --dry-run: passed
+- manage.py test apps.arca apps.sales apps.tenants apps.platform_billing --noinput: passed (43 tests)
+- docker compose config --quiet: passed
+
+Risks:
+- La outbox requiere un worker activo y monitoreado.
+- Produccion requiere HTTPS y el guard productivo habilitado en Platform.
+
+Important notes:
+- postas_api no almacena cert, key ni access_token.
+- Cambiar arca_environment no modifica solicitudes ya creadas.
+- La automatizacion solo puede activarse con entitlement, perfil validado y concepto Productos.
+- Docker Compose inicia arca_outbox_worker y postas_platform_arca_worker como procesos separados.

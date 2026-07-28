@@ -51,6 +51,7 @@ class FakeEnforcementClient:
     POSTAS_PLATFORM_SERVICE_TOKEN="shared-token",
     POSTAS_PLATFORM_SOURCE="postas_api",
     POSTAS_PLATFORM_TIMEOUT_SECONDS=7,
+    POSTAS_PLATFORM_REQUIRE_TLS=False,
 )
 class PlatformBillingClientTests(SimpleTestCase):
     def test_check_entitlement_sends_required_headers_and_payload(self):

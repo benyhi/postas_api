@@ -4,6 +4,184 @@ info:
   version: 1.0.0
   description: API para sistema de punto de venta (POS) multi-tenant
 paths:
+  /api/v1/arca/configuration/:
+    get:
+      operationId: v1_arca_configuration_retrieve
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArcaConfigurationResponse'
+          description: ''
+    put:
+      operationId: v1_arca_configuration_update
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ArcaConfigurationWriteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ArcaConfigurationWriteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ArcaConfigurationWriteRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArcaConfigurationResponse'
+          description: ''
+    delete:
+      operationId: v1_arca_configuration_destroy
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/arca/invoices/:
+    post:
+      operationId: v1_arca_invoices_create
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ArcaInvoiceCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ArcaInvoiceCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ArcaInvoiceCreateRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArcaInvoiceResponse'
+          description: ''
+  /api/v1/arca/invoices/by-external-id/{external_id}/:
+    get:
+      operationId: v1_arca_invoices_by_external_id_retrieve
+      parameters:
+      - in: path
+        name: external_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArcaInvoiceResponse'
+          description: ''
+  /api/v1/arca/invoices/explicit/:
+    post:
+      operationId: v1_arca_invoices_explicit_create
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ArcaExplicitInvoiceCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ArcaExplicitInvoiceCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ArcaExplicitInvoiceCreateRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArcaInvoiceResponse'
+          description: ''
+  /api/v1/arca/invoices/fiscal/:
+    get:
+      operationId: v1_arca_invoices_fiscal_retrieve
+      parameters:
+      - in: query
+        name: environment
+        schema:
+          enum:
+          - development
+          - production
+          type: string
+          minLength: 1
+        description: |-
+          * `development` - development
+          * `production` - production
+        required: true
+      - in: query
+        name: point_of_sale
+        schema:
+          type: integer
+          minimum: 1
+        required: true
+      - in: query
+        name: voucher_number
+        schema:
+          type: integer
+          minimum: 1
+        required: true
+      - in: query
+        name: voucher_type
+        schema:
+          type: integer
+          minimum: 1
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArcaInvoiceResponse'
+          description: ''
+  /api/v1/arca/invoices/last-voucher/:
+    get:
+      operationId: v1_arca_invoices_last_voucher_retrieve
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArcaLastVoucherResponse'
+          description: ''
   /api/v1/audit/:
     get:
       operationId: v1_audit_list
@@ -1772,6 +1950,308 @@ components:
         * `CASHBOX_EMAIL` - Cashbox email
         * `CASHBOX_EMAIL_SKIP` - Cashbox email skipped
         * `CASHBOX_EMAIL_FAILED` - Cashbox email failed
+    ArcaConfigurationResponse:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        automatic_invoicing_enabled:
+          type: boolean
+        arca_environment:
+          $ref: '#/components/schemas/ArcaEnvironmentB91Enum'
+        profile:
+          type: object
+          additionalProperties: {}
+          nullable: true
+      required:
+      - arca_environment
+      - automatic_invoicing_enabled
+      - profile
+      - tenant_id
+    ArcaConfigurationWriteRequest:
+      type: object
+      properties:
+        automatic_invoicing_enabled:
+          type: boolean
+        arca_environment:
+          $ref: '#/components/schemas/ArcaEnvironmentB91Enum'
+        arca_cuit:
+          type: string
+          minLength: 1
+          pattern: ^\d{11}$
+        certificate:
+          type: string
+          writeOnly: true
+          minLength: 1
+        private_key:
+          type: string
+          writeOnly: true
+          minLength: 1
+        access_token:
+          type: string
+          writeOnly: true
+          minLength: 1
+        point_of_sale:
+          type: integer
+          minimum: 1
+        automatic_voucher_type:
+          type: integer
+          minimum: 1
+        concept:
+          type: integer
+          maximum: 3
+          minimum: 1
+        default_vat_rate:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+        default_vat_id:
+          type: integer
+          minimum: 1
+    ArcaEnvironmentB91Enum:
+      enum:
+      - development
+      - production
+      type: string
+      description: |-
+        * `development` - development
+        * `production` - production
+    ArcaExplicitInvoiceCreateRequest:
+      type: object
+      properties:
+        external_id:
+          type: string
+          minLength: 1
+          maxLength: 160
+        sale_id:
+          type: string
+          format: uuid
+          nullable: true
+        receiver:
+          $ref: '#/components/schemas/ArcaReceiverRequest'
+        invoice_date:
+          type: string
+          format: date
+        service_start_date:
+          type: string
+          format: date
+          nullable: true
+        service_end_date:
+          type: string
+          format: date
+          nullable: true
+        payment_due_date:
+          type: string
+          format: date
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ArcaItemRequest'
+        voucher_number:
+          type: integer
+          minimum: 1
+      required:
+      - external_id
+      - items
+      - voucher_number
+    ArcaInvoiceCreateRequest:
+      type: object
+      properties:
+        external_id:
+          type: string
+          minLength: 1
+          maxLength: 160
+        sale_id:
+          type: string
+          format: uuid
+          nullable: true
+        receiver:
+          $ref: '#/components/schemas/ArcaReceiverRequest'
+        invoice_date:
+          type: string
+          format: date
+        service_start_date:
+          type: string
+          format: date
+          nullable: true
+        service_end_date:
+          type: string
+          format: date
+          nullable: true
+        payment_due_date:
+          type: string
+          format: date
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ArcaItemRequest'
+      required:
+      - external_id
+      - items
+    ArcaInvoiceError:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        retryable:
+          type: boolean
+      required:
+      - code
+      - message
+    ArcaInvoiceResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+        tenant_id:
+          type: string
+          format: uuid
+        environment:
+          $ref: '#/components/schemas/EnvironmentEnum'
+        fiscal_profile_id:
+          type: integer
+        sale_id:
+          type: string
+          format: uuid
+          nullable: true
+        external_id:
+          type: string
+        actor_id:
+          type: string
+          format: uuid
+          nullable: true
+        actor_role:
+          type: string
+          nullable: true
+        status:
+          type: string
+        point_of_sale:
+          type: integer
+        voucher_type:
+          type: integer
+        voucher_number:
+          type: integer
+          nullable: true
+        net_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,13}(?:\.\d{0,2})?$
+        iva_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,13}(?:\.\d{0,2})?$
+        total_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,13}(?:\.\d{0,2})?$
+        cae:
+          type: string
+          nullable: true
+        cae_expiration_date:
+          type: string
+          format: date
+          nullable: true
+        observations:
+          type: array
+          items:
+            type: string
+        attempt_count:
+          type: integer
+        next_retry_at:
+          type: string
+          format: date-time
+          nullable: true
+        error:
+          allOf:
+          - $ref: '#/components/schemas/ArcaInvoiceError'
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+      - actor_id
+      - actor_role
+      - attempt_count
+      - cae
+      - cae_expiration_date
+      - created_at
+      - environment
+      - error
+      - external_id
+      - fiscal_profile_id
+      - id
+      - iva_amount
+      - net_amount
+      - next_retry_at
+      - observations
+      - point_of_sale
+      - sale_id
+      - status
+      - tenant_id
+      - total_amount
+      - updated_at
+      - voucher_number
+      - voucher_type
+    ArcaItemRequest:
+      type: object
+      properties:
+        description:
+          type: string
+          minLength: 1
+          maxLength: 255
+        quantity:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+        final_unit_price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,13}(?:\.\d{0,2})?$
+      required:
+      - description
+      - final_unit_price
+      - quantity
+    ArcaLastVoucherResponse:
+      type: object
+      properties:
+        environment:
+          $ref: '#/components/schemas/EnvironmentEnum'
+        point_of_sale:
+          type: integer
+        voucher_type:
+          type: integer
+        last_voucher_number:
+          type: integer
+      required:
+      - environment
+      - last_voucher_number
+      - point_of_sale
+      - voucher_type
+    ArcaReceiverRequest:
+      type: object
+      properties:
+        doc_type:
+          type: integer
+          minimum: 0
+          default: 99
+        doc_number:
+          type: string
+          minLength: 1
+          default: '0'
+          maxLength: 20
+          pattern: ^\d+$
+        iva_condition_id:
+          type: integer
+          minimum: 1
+          default: 5
     AuditLog:
       type: object
       properties:
@@ -2151,6 +2631,14 @@ components:
         * `SALE` - Sale
         * `CASHBOX` - Cashbox
         * `TENANT_CONFIG` - Tenant config
+    EnvironmentEnum:
+      enum:
+      - development
+      - production
+      type: string
+      description: |-
+        * `development` - development
+        * `production` - production
     MethodEnum:
       enum:
       - CASH
@@ -2842,10 +3330,19 @@ components:
           items:
             $ref: '#/components/schemas/SaleDetailRead'
           readOnly: true
+        invoice_status:
+          type: string
+          readOnly: true
+        invoice_tracking_id:
+          type: string
+          nullable: true
+          readOnly: true
       required:
       - cashbox
       - created_at
       - details
+      - invoice_status
+      - invoice_tracking_id
       - payment_method
       - tenant_id
       - total
@@ -3029,6 +3526,13 @@ components:
           maxLength: 254
         cashbox_email_notifications_enabled:
           type: boolean
+        automatic_invoicing_enabled:
+          type: boolean
+          readOnly: true
+        arca_environment:
+          allOf:
+          - $ref: '#/components/schemas/TenantConfigArcaEnvironmentEnum'
+          readOnly: true
         created_at:
           type: string
           format: date-time
@@ -3038,9 +3542,19 @@ components:
           format: date-time
           readOnly: true
       required:
+      - arca_environment
+      - automatic_invoicing_enabled
       - created_at
       - tenant_id
       - updated_at
+    TenantConfigArcaEnvironmentEnum:
+      enum:
+      - development
+      - production
+      type: string
+      description: |-
+        * `development` - Development
+        * `production` - Production
     TenantConfigRequest:
       type: object
       properties:

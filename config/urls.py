@@ -70,6 +70,9 @@ urlpatterns = [
     # Billing / plans
     path('api/v1/billing/', include('apps.platform_billing.urls')),
 
+    # ARCA invoicing
+    path('api/v1/arca/', include('apps.arca.urls')),
+
     # Cloud / Storage
     path('api/v1/cloud/', include(cloud_urlpatterns)),
 

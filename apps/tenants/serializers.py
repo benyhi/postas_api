@@ -12,7 +12,15 @@ class TenantConfigSerializer(serializers.ModelSerializer):
             "tenant_id",
             "notification_email",
             "cashbox_email_notifications_enabled",
+            "automatic_invoicing_enabled",
+            "arca_environment",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["tenant_id", "created_at", "updated_at"]
+        read_only_fields = [
+            "tenant_id",
+            "automatic_invoicing_enabled",
+            "arca_environment",
+            "created_at",
+            "updated_at",
+        ]

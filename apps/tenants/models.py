@@ -19,6 +19,10 @@ class Tenant(models.Model):
 
 
 class TenantConfig(models.Model):
+    class ArcaEnvironment(models.TextChoices):
+        DEVELOPMENT = "development", "Development"
+        PRODUCTION = "production", "Production"
+
     tenant = models.OneToOneField(
         Tenant,
         on_delete=models.CASCADE,
@@ -28,6 +32,12 @@ class TenantConfig(models.Model):
     )
     notification_email = models.EmailField(blank=True)
     cashbox_email_notifications_enabled = models.BooleanField(default=True)
+    automatic_invoicing_enabled = models.BooleanField(default=False)
+    arca_environment = models.CharField(
+        max_length=20,
+        choices=ArcaEnvironment.choices,
+        default=ArcaEnvironment.DEVELOPMENT,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

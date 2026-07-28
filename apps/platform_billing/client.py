@@ -193,6 +193,11 @@ class PlatformBillingClient:
                 "POSTAS_PLATFORM_SERVICE_TOKEN no esta configurado.",
                 status_code=503,
             )
+        if settings.POSTAS_PLATFORM_REQUIRE_TLS and parse.urlparse(self.base_url).scheme.lower() != "https":
+            raise PlatformBillingError(
+                "POSTAS_PLATFORM_API_URL debe usar HTTPS.",
+                status_code=503,
+            )
 
     @staticmethod
     def _usage_payload(

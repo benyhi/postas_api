@@ -6,6 +6,8 @@ from django.db import transaction
 from apps.sales.models import Sale, SaleDetail
 from apps.products.models import Product
 from apps.cashbox.models import Cashbox
+from apps.arca.outbox import create_sale_fiscal_request
+from apps.arca.models import FiscalOutboxRequest
 
 
 class SaleDetailWriteSerializer(serializers.Serializer):
@@ -108,6 +110,8 @@ class SaleCreateSerializer(serializers.Serializer):
             detail.sale = sale
         SaleDetail.objects.bulk_create(details)
 
+        create_sale_fiscal_request(sale, request.user)
+
         return sale
 
 
@@ -122,11 +126,25 @@ class SaleDetailReadSerializer(serializers.ModelSerializer):
 class SaleReadSerializer(serializers.ModelSerializer):
     details = SaleDetailReadSerializer(many=True, read_only=True)
     user_username = serializers.CharField(source="user.username", read_only=True)
+    invoice_status = serializers.SerializerMethodField()
+    invoice_tracking_id = serializers.SerializerMethodField()
+
+    def get_invoice_status(self, obj) -> str:
+        try:
+            return obj.fiscal_request.invoice_status
+        except (AttributeError, FiscalOutboxRequest.DoesNotExist):
+            return "not_requested"
+
+    def get_invoice_tracking_id(self, obj) -> str | None:
+        try:
+            return obj.fiscal_request.external_id
+        except (AttributeError, FiscalOutboxRequest.DoesNotExist):
+            return None
 
     class Meta:
         model = Sale
         fields = [
             "uuid", "tenant_id", "user", "user_username",
             "cashbox", "total", "payment_method", "payments", "status",
-            "created_at", "details",
+            "created_at", "details", "invoice_status", "invoice_tracking_id",
         ]
