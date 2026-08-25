@@ -53,6 +53,7 @@ urlpatterns = [
 
     # Cashbox
     path('api/v1/cashboxes/', include('apps.cashbox.urls')),
+    path('api/v1/cash-registers/', include('apps.cashbox.register_urls')),
 
     # Reports
     path('api/v1/reports/', include('apps.reports.urls')),

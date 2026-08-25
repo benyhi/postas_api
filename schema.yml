@@ -216,6 +216,7 @@ paths:
           type: string
           enum:
           - CASHBOX
+          - CASH_REGISTER
           - CATEGORY
           - PRODUCT
           - SALE
@@ -227,6 +228,7 @@ paths:
           * `CATEGORY` - Category
           * `SALE` - Sale
           * `CASHBOX` - Cashbox
+          * `CASH_REGISTER` - Cash register
           * `TENANT_CONFIG` - Tenant config
       - name: page
         required: false
@@ -423,9 +425,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/BillingError'
           description: No se pudo consultar postas_platform_api.
-  /api/v1/cashboxes/:
+  /api/v1/cash-registers/:
     get:
-      operationId: v1_cashboxes_list
+      operationId: v1_cash_registers_list
+      summary: Listar terminales activas
       parameters:
       - name: page
         required: false
@@ -434,7 +437,162 @@ paths:
         schema:
           type: integer
       tags:
-      - v1
+      - Cash registers
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedCashRegisterList'
+          description: ''
+    post:
+      operationId: v1_cash_registers_create
+      summary: Crear terminal
+      tags:
+      - Cash registers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CashRegisterRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CashRegisterRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CashRegisterRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashRegister'
+          description: ''
+  /api/v1/cash-registers/{uuid}/:
+    get:
+      operationId: v1_cash_registers_retrieve
+      summary: Detalle de terminal
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Cash registers
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashRegister'
+          description: ''
+    put:
+      operationId: v1_cash_registers_update
+      summary: Actualizar terminal
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Cash registers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CashRegisterRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CashRegisterRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CashRegisterRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashRegister'
+          description: ''
+    patch:
+      operationId: v1_cash_registers_partial_update
+      summary: Renombrar o desactivar terminal
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Cash registers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedCashRegisterRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedCashRegisterRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedCashRegisterRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashRegister'
+          description: ''
+  /api/v1/cashboxes/:
+    get:
+      operationId: v1_cashboxes_list
+      description: Lista paginada de todas las cajas (abiertas y cerradas). Solo ADMIN
+        u OWNER.
+      summary: Listar cajas
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - in: query
+        name: register_id
+        schema:
+          type: string
+        description: UUID de la terminal
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum:
+          - CLOSED
+          - OPEN
+        description: Estado de la sesion
+      - in: query
+        name: user_id
+        schema:
+          type: string
+        description: UUID del operador que abrio
+      tags:
+      - Cashbox
       security:
       - jwtAuth: []
       responses:
@@ -447,6 +605,8 @@ paths:
   /api/v1/cashboxes/{uuid}/:
     get:
       operationId: v1_cashboxes_retrieve
+      description: Devuelve el detalle de una caja por UUID. Solo ADMIN u OWNER.
+      summary: Detalle de caja
       parameters:
       - in: path
         name: uuid
@@ -455,7 +615,7 @@ paths:
           format: uuid
         required: true
       tags:
-      - v1
+      - Cashbox
       security:
       - jwtAuth: []
       responses:
@@ -510,8 +670,8 @@ paths:
   /api/v1/cashboxes/close/:
     post:
       operationId: v1_cashboxes_close_create
-      description: Cierra la caja abierta del tenant. Calcula expected_amount y difference
-        automaticamente.
+      description: Cierra la sesion abierta del usuario. ADMIN/OWNER pueden enviar
+        cashbox_id para cerrar administrativamente otra sesion del tenant.
       summary: Cerrar caja
       tags:
       - Cashbox
@@ -544,7 +704,7 @@ paths:
   /api/v1/cashboxes/current/:
     get:
       operationId: v1_cashboxes_current_retrieve
-      description: Devuelve la caja abierta actualmente para el tenant.
+      description: Devuelve la sesion abierta del usuario autenticado.
       summary: Caja actual
       tags:
       - Cashbox
@@ -560,8 +720,8 @@ paths:
   /api/v1/cashboxes/open/:
     post:
       operationId: v1_cashboxes_open_create
-      description: Abre una nueva caja con un monto inicial. Solo se permite una caja
-        abierta por tenant.
+      description: Abre una sesion en una terminal activa. Cada usuario y terminal
+        solo pueden tener una sesion abierta; el limite simultaneo depende del plan.
       summary: Abrir caja
       tags:
       - Cashbox
@@ -573,6 +733,7 @@ paths:
             examples:
               AbrirCaja:
                 value:
+                  register_id: uuid-de-la-terminal
                   initial_amount: '5000.00'
                 summary: Abrir caja
           application/x-www-form-urlencoded:
@@ -1338,6 +1499,11 @@ paths:
       summary: Productos mas vendidos
       parameters:
       - in: query
+        name: cashbox_id
+        schema:
+          type: string
+        description: UUID de la sesion de caja
+      - in: query
         name: from
         schema:
           type: string
@@ -1348,10 +1514,20 @@ paths:
           type: integer
         description: 'Cantidad maxima de productos (default: 10)'
       - in: query
+        name: register_id
+        schema:
+          type: string
+        description: UUID de la terminal
+      - in: query
         name: to
         schema:
           type: string
         description: Fecha hasta (YYYY-MM-DD)
+      - in: query
+        name: user_id
+        schema:
+          type: string
+        description: UUID del operador
       tags:
       - Reports
       security:
@@ -1380,15 +1556,30 @@ paths:
       summary: Ventas agrupadas por dia
       parameters:
       - in: query
+        name: cashbox_id
+        schema:
+          type: string
+        description: UUID de la sesion de caja
+      - in: query
         name: from
         schema:
           type: string
         description: Fecha desde (YYYY-MM-DD)
       - in: query
+        name: register_id
+        schema:
+          type: string
+        description: UUID de la terminal
+      - in: query
         name: to
         schema:
           type: string
         description: Fecha hasta (YYYY-MM-DD)
+      - in: query
+        name: user_id
+        schema:
+          type: string
+        description: UUID del operador
       tags:
       - Reports
       security:
@@ -1410,15 +1601,30 @@ paths:
       summary: Ventas por metodo de pago
       parameters:
       - in: query
+        name: cashbox_id
+        schema:
+          type: string
+        description: UUID de la sesion de caja
+      - in: query
         name: from
         schema:
           type: string
         description: 'Fecha desde (YYYY-MM-DD). Por defecto: hoy.'
       - in: query
+        name: register_id
+        schema:
+          type: string
+        description: UUID de la terminal
+      - in: query
         name: to
         schema:
           type: string
         description: Fecha hasta (YYYY-MM-DD)
+      - in: query
+        name: user_id
+        schema:
+          type: string
+        description: UUID del operador
       tags:
       - Reports
       security:
@@ -1449,15 +1655,30 @@ paths:
       summary: Reporte de ventas diarias
       parameters:
       - in: query
+        name: cashbox_id
+        schema:
+          type: string
+        description: UUID de la sesion de caja
+      - in: query
         name: from
         schema:
           type: string
         description: 'Fecha desde (YYYY-MM-DD). Por defecto: hoy.'
       - in: query
+        name: register_id
+        schema:
+          type: string
+        description: UUID de la terminal
+      - in: query
         name: to
         schema:
           type: string
         description: Fecha hasta (YYYY-MM-DD)
+      - in: query
+        name: user_id
+        schema:
+          type: string
+        description: UUID del operador
       tags:
       - Reports
       security:
@@ -1478,15 +1699,55 @@ paths:
   /api/v1/sales/:
     get:
       operationId: v1_sales_list
+      description: Lista paginada de ventas. ADMIN/OWNER ven todo el tenant; EMPLOYEE
+        ve solo ventas de la caja abierta actual. Soporta filtros por user_id, payment_method,
+        from y to.
+      summary: Listar ventas
       parameters:
+      - in: query
+        name: cashbox_id
+        schema:
+          type: string
+        description: Filtrar por UUID de la sesion de caja
+      - in: query
+        name: from
+        schema:
+          type: string
+        description: Fecha desde (YYYY-MM-DD)
       - name: page
         required: false
         in: query
         description: A page number within the paginated result set.
         schema:
           type: integer
+      - in: query
+        name: payment_method
+        schema:
+          type: string
+          enum:
+          - CASH
+          - CREDIT
+          - DEBIT
+          - QR
+          - TRANSFER
+        description: Filtrar por metodo de pago (CASH, DEBIT, CREDIT, TRANSFER, QR)
+      - in: query
+        name: register_id
+        schema:
+          type: string
+        description: Filtrar por UUID de la terminal
+      - in: query
+        name: to
+        schema:
+          type: string
+        description: Fecha hasta (YYYY-MM-DD)
+      - in: query
+        name: user_id
+        schema:
+          type: string
+        description: Filtrar por UUID del usuario vendedor
       tags:
-      - v1
+      - Sales
       security:
       - jwtAuth: []
       responses:
@@ -1524,6 +1785,9 @@ paths:
   /api/v1/sales/{uuid}/:
     get:
       operationId: v1_sales_retrieve
+      description: Devuelve el detalle completo de una venta incluyendo sus items.
+        EMPLOYEE solo puede ver ventas de la caja abierta actual.
+      summary: Detalle de venta
       parameters:
       - in: path
         name: uuid
@@ -1532,7 +1796,7 @@ paths:
           format: uuid
         required: true
       tags:
-      - v1
+      - Sales
       security:
       - jwtAuth: []
       responses:
@@ -2298,6 +2562,42 @@ components:
           type: string
       required:
       - detail
+    CashRegister:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          maxLength: 100
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - name
+      - updated_at
+      - uuid
+    CashRegisterRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        active:
+          type: boolean
+      required:
+      - name
     CashboxCloseRequest:
       type: object
       properties:
@@ -2305,6 +2605,10 @@ components:
           type: string
           format: decimal
           pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        cashbox_id:
+          type: string
+          format: uuid
+          writeOnly: true
       required:
       - final_amount
     CashboxNotifyEmailError:
@@ -2363,12 +2667,17 @@ components:
     CashboxOpenRequest:
       type: object
       properties:
+        register_id:
+          type: string
+          format: uuid
+          writeOnly: true
         initial_amount:
           type: string
           format: decimal
           pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
       required:
       - initial_amount
+      - register_id
     CashboxRead:
       type: object
       properties:
@@ -2379,6 +2688,14 @@ components:
         tenant_id:
           type: string
           format: uuid
+        register:
+          type: string
+          format: uuid
+          nullable: true
+        register_name:
+          type: string
+          readOnly: true
+          nullable: true
         opened_by:
           type: string
           format: uuid
@@ -2427,6 +2744,7 @@ components:
       - opened_at
       - opened_by
       - opened_by_username
+      - register_name
       - tenant_id
       - uuid
     CashboxReadStatusEnum:
@@ -2441,6 +2759,16 @@ components:
       type: object
       properties:
         cashbox_uuid:
+          type: string
+          format: uuid
+        register_uuid:
+          type: string
+          format: uuid
+          nullable: true
+        register_name:
+          type: string
+          nullable: true
+        opened_by:
           type: string
           format: uuid
         status:
@@ -2489,6 +2817,9 @@ components:
       - final_amount
       - initial_amount
       - opened_at
+      - opened_by
+      - register_name
+      - register_uuid
       - sale_count
       - status
       - total_sold
@@ -2622,6 +2953,7 @@ components:
       - CATEGORY
       - SALE
       - CASHBOX
+      - CASH_REGISTER
       - TENANT_CONFIG
       type: string
       description: |-
@@ -2630,6 +2962,7 @@ components:
         * `CATEGORY` - Category
         * `SALE` - Sale
         * `CASHBOX` - Cashbox
+        * `CASH_REGISTER` - Cash register
         * `TENANT_CONFIG` - Tenant config
     EnvironmentEnum:
       enum:
@@ -2674,6 +3007,29 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AuditLog'
+    PaginatedCashRegisterList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/CashRegister'
     PaginatedCashboxReadList:
       type: object
       required:
@@ -2835,6 +3191,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/UserRead'
+    PatchedCashRegisterRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        active:
+          type: boolean
     PatchedCategoryRequest:
       type: object
       properties:

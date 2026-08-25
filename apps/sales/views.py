@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from django.db import transaction
 from django.db.models import Q
-from rest_framework import generics, status
+from rest_framework import generics, serializers, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiExample, OpenApiParameter
@@ -10,12 +10,14 @@ from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiExam
 from apps.platform_billing.enforcement import check_and_consume_billing_usage
 from apps.sales.models import Sale, SaleDetail
 from apps.sales.serializers import SaleCreateSerializer, SaleReadSerializer
+from apps.cashbox.models import Cashbox
+from apps.tenants.models import Tenant
 from core.permissions.roles import IsAdminOrOwner
 from core.utils.audit import log_action
 
 
 @extend_schema_view(
-    list=extend_schema(
+    get=extend_schema(
         summary="Listar ventas",
         description=(
             "Lista paginada de ventas. ADMIN/OWNER ven todo el tenant; "
@@ -25,6 +27,8 @@ from core.utils.audit import log_action
         tags=["Sales"],
         parameters=[
             OpenApiParameter(name="user_id", description="Filtrar por UUID del usuario vendedor", type=str, required=False),
+            OpenApiParameter(name="cashbox_id", description="Filtrar por UUID de la sesion de caja", type=str, required=False),
+            OpenApiParameter(name="register_id", description="Filtrar por UUID de la terminal", type=str, required=False),
             OpenApiParameter(name="payment_method", description="Filtrar por metodo de pago (CASH, DEBIT, CREDIT, TRANSFER, QR)", type=str, required=False, enum=["CASH", "DEBIT", "CREDIT", "TRANSFER", "QR"]),
             OpenApiParameter(name="from", description="Fecha desde (YYYY-MM-DD)", type=str, required=False),
             OpenApiParameter(name="to", description="Fecha hasta (YYYY-MM-DD)", type=str, required=False),
@@ -41,16 +45,24 @@ class SaleListCreateView(generics.ListCreateAPIView):
         if getattr(self, "swagger_fake_view", False):
             return Sale.objects.none()
         qs = Sale.objects.filter(tenant_id=self.request.tenant_id).select_related(
-            "user", "cashbox",
+            "user", "cashbox", "cashbox__register",
         ).prefetch_related("details__product")
 
         if self.request.user.role == "EMPLOYEE":
-            qs = qs.filter(cashbox__status="OPEN")
+            qs = qs.filter(cashbox__status="OPEN", cashbox__opened_by=self.request.user)
 
         # Filters
         user_id = self.request.query_params.get("user_id")
         if user_id:
-            qs = qs.filter(user_id=user_id)
+            qs = qs.filter(user_id=_uuid_query_param(self.request, "user_id"))
+
+        cashbox_id = self.request.query_params.get("cashbox_id")
+        if cashbox_id:
+            qs = qs.filter(cashbox_id=_uuid_query_param(self.request, "cashbox_id"))
+
+        register_id = self.request.query_params.get("register_id")
+        if register_id:
+            qs = qs.filter(cashbox__register_id=_uuid_query_param(self.request, "register_id"))
 
         payment_method = self.request.query_params.get("payment_method")
         if payment_method:
@@ -112,6 +124,8 @@ class SaleListCreateView(generics.ListCreateAPIView):
                     "total": str(sale.total),
                     "payment_method": sale.payment_method,
                     "items_count": sale.details.count(),
+                    "cashbox_id": str(sale.cashbox_id),
+                    "register_id": str(sale.cashbox.register_id) if sale.cashbox.register_id else None,
                 },
                 context={"source": "sales", "operation": "create_sale"},
             )
@@ -119,13 +133,15 @@ class SaleListCreateView(generics.ListCreateAPIView):
                 "total": str(sale.total),
                 "payment_method": sale.payment_method,
                 "items_count": sale.details.count(),
+                "cashbox_id": str(sale.cashbox_id),
+                "register_id": str(sale.cashbox.register_id) if sale.cashbox.register_id else None,
             })
         read_serializer = SaleReadSerializer(sale)
         return Response(read_serializer.data, status=status.HTTP_201_CREATED)
 
 
 @extend_schema_view(
-    retrieve=extend_schema(
+    get=extend_schema(
         summary="Detalle de venta",
         description=(
             "Devuelve el detalle completo de una venta incluyendo sus items. "
@@ -143,9 +159,9 @@ class SaleDetailView(generics.RetrieveAPIView):
             return Sale.objects.none()
         qs = Sale.objects.filter(
             tenant_id=self.request.tenant_id,
-        ).select_related("user", "cashbox").prefetch_related("details__product")
+        ).select_related("user", "cashbox", "cashbox__register").prefetch_related("details__product")
         if self.request.user.role == "EMPLOYEE":
-            qs = qs.filter(cashbox__status="OPEN")
+            qs = qs.filter(cashbox__status="OPEN", cashbox__opened_by=self.request.user)
         return qs
 
 
@@ -159,35 +175,58 @@ class SaleCancelView(APIView):
         request=None,
         responses={200: SaleReadSerializer},
     )
-    @transaction.atomic
     def post(self, request, uuid):
-        try:
-            sale = Sale.objects.select_for_update().get(
-                uuid=uuid, tenant_id=request.tenant_id,
-            )
-        except Sale.DoesNotExist:
-            return Response(
-                {"detail": "Sale not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        with transaction.atomic():
+            Tenant.objects.select_for_update().get(uuid=request.tenant_id)
+            try:
+                cashbox_id = Sale.objects.only("cashbox_id").get(
+                    uuid=uuid,
+                    tenant_id=request.tenant_id,
+                ).cashbox_id
+                cashbox = Cashbox.objects.select_for_update().get(
+                    uuid=cashbox_id,
+                    tenant_id=request.tenant_id,
+                )
+                sale = Sale.objects.select_for_update().get(
+                    uuid=uuid,
+                    tenant_id=request.tenant_id,
+                    cashbox=cashbox,
+                )
+            except (Sale.DoesNotExist, Cashbox.DoesNotExist):
+                return Response(
+                    {"detail": "Sale not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
-        if sale.status == Sale.Status.CANCELLED:
-            return Response(
-                {"detail": "Sale is already cancelled."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            if sale.status == Sale.Status.CANCELLED:
+                return Response(
+                    {"detail": "Sale is already cancelled."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
-        # Revert stock
-        for detail in sale.details.select_related("product"):
-            product = detail.product
-            product.stock += detail.quantity
-            product.save(update_fields=["stock"])
+            if cashbox.status == Cashbox.Status.CLOSED:
+                return Response(
+                    {"detail": "Sales from a closed cashbox cannot be cancelled."},
+                    status=status.HTTP_409_CONFLICT,
+                )
 
-        sale.status = Sale.Status.CANCELLED
-        sale.save(update_fields=["status"])
+            for detail in sale.details.select_related("product"):
+                product = detail.product
+                product.stock += detail.quantity
+                product.save(update_fields=["stock"])
+
+            sale.status = Sale.Status.CANCELLED
+            sale.save(update_fields=["status"])
 
         log_action(request, "SALE", "SALE", sale.uuid, {
-            "action": "CANCEL", "total": str(sale.total),
+            "action": "CANCEL",
+            "total": str(sale.total),
+            "cashbox_id": str(sale.cashbox_id),
+            "register_id": str(sale.cashbox.register_id) if sale.cashbox.register_id else None,
         })
 
         return Response(SaleReadSerializer(sale).data)
+
+
+def _uuid_query_param(request, name):
+    return serializers.UUIDField().run_validation(request.query_params[name])

@@ -6,6 +6,7 @@ from django.db import transaction
 from apps.sales.models import Sale, SaleDetail
 from apps.products.models import Product
 from apps.cashbox.models import Cashbox
+from apps.tenants.models import Tenant
 from apps.arca.outbox import create_sale_fiscal_request
 from apps.arca.models import FiscalOutboxRequest
 
@@ -30,10 +31,12 @@ class SaleCreateSerializer(serializers.Serializer):
 
         # Validate open cashbox
         cashbox = Cashbox.objects.filter(
-            tenant_id=tenant_id, status=Cashbox.Status.OPEN,
+            tenant_id=tenant_id,
+            opened_by=request.user,
+            status=Cashbox.Status.OPEN,
         ).first()
         if not cashbox:
-            raise serializers.ValidationError("No open cashbox. Open a cashbox first.")
+            raise serializers.ValidationError("No open cashbox for this user. Open a cashbox first.")
         attrs["cashbox"] = cashbox
 
         # Validate products, stock, and compute total
@@ -75,9 +78,19 @@ class SaleCreateSerializer(serializers.Serializer):
     def create(self, validated_data):
         request = self.context["request"]
         items = validated_data["items"]
-        cashbox = validated_data["cashbox"]
+        cashbox_candidate = validated_data["cashbox"]
         payments = validated_data["payments"]
         total = validated_data["computed_total"]
+
+        Tenant.objects.select_for_update().get(uuid=request.tenant_id)
+        cashbox = Cashbox.objects.select_for_update().filter(
+            uuid=cashbox_candidate.uuid,
+            tenant_id=request.tenant_id,
+            opened_by=request.user,
+            status=Cashbox.Status.OPEN,
+        ).first()
+        if cashbox is None:
+            raise serializers.ValidationError("The user's cashbox is no longer open.")
 
         details = []
         for item in items:

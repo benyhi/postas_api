@@ -6,12 +6,39 @@ from django.conf import settings
 from core.models.tenant_model import TenantModel
 
 
+class CashRegister(TenantModel):
+    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "cash_registers"
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant_id", "name"],
+                name="cash_register_unique_tenant_name",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.tenant_id})"
+
+
 class Cashbox(TenantModel):
     class Status(models.TextChoices):
         OPEN = "OPEN", "Open"
         CLOSED = "CLOSED", "Closed"
 
     uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    register = models.ForeignKey(
+        CashRegister,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="cashboxes",
+    )
     opened_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -35,6 +62,18 @@ class Cashbox(TenantModel):
     class Meta:
         db_table = "cashboxes"
         ordering = ["-opened_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["register"],
+                condition=models.Q(status="OPEN"),
+                name="cashbox_unique_open_register",
+            ),
+            models.UniqueConstraint(
+                fields=["opened_by"],
+                condition=models.Q(status="OPEN"),
+                name="cashbox_unique_open_user",
+            ),
+        ]
 
     def __str__(self):
         return f"Cashbox {self.uuid} ({self.status})"

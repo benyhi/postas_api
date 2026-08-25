@@ -54,6 +54,22 @@ _date_params = [
     OpenApiParameter(name="from", description="Fecha desde (YYYY-MM-DD). Por defecto: hoy.", type=str, required=False),
     OpenApiParameter(name="to", description="Fecha hasta (YYYY-MM-DD)", type=str, required=False),
 ]
+_scope_params = [
+    OpenApiParameter(name="user_id", description="UUID del operador", type=str, required=False),
+    OpenApiParameter(name="cashbox_id", description="UUID de la sesion de caja", type=str, required=False),
+    OpenApiParameter(name="register_id", description="UUID de la terminal", type=str, required=False),
+]
+
+
+def _filter_sale_scope(queryset, request, prefix=""):
+    filters = {}
+    if request.query_params.get("user_id"):
+        filters[f"{prefix}user_id"] = serializers.UUIDField().run_validation(request.query_params["user_id"])
+    if request.query_params.get("cashbox_id"):
+        filters[f"{prefix}cashbox_id"] = serializers.UUIDField().run_validation(request.query_params["cashbox_id"])
+    if request.query_params.get("register_id"):
+        filters[f"{prefix}cashbox__register_id"] = serializers.UUIDField().run_validation(request.query_params["register_id"])
+    return queryset.filter(**filters)
 
 
 class DailySalesReportView(APIView):
@@ -63,7 +79,7 @@ class DailySalesReportView(APIView):
         summary="Reporte de ventas diarias",
         description="Retorna total vendido, cantidad de ventas y promedio. Filtra por rango de fechas (from/to). Sin fechas, muestra solo hoy.",
         tags=["Reports"],
-        parameters=_date_params,
+        parameters=_date_params + _scope_params,
         responses={200: inline_serializer("DailySalesReport", fields={
             "total_sold": serializers.DecimalField(max_digits=12, decimal_places=2),
             "sale_count": serializers.IntegerField(),
@@ -79,6 +95,7 @@ class DailySalesReportView(APIView):
             tenant_id=request.tenant_id,
             status=Sale.Status.COMPLETED,
         )
+        qs = _filter_sale_scope(qs, request)
 
         date_from = request.query_params.get("from")
         date_to = request.query_params.get("to")
@@ -111,7 +128,7 @@ class SalesByPaymentReportView(APIView):
         summary="Ventas por metodo de pago",
         description="Desglose de ventas agrupadas por metodo de pago. Filtra por rango de fechas.",
         tags=["Reports"],
-        parameters=_date_params,
+        parameters=_date_params + _scope_params,
         responses={200: inline_serializer("SalesByPaymentReport", fields={
             "payment_method": serializers.CharField(),
             "total": serializers.DecimalField(max_digits=12, decimal_places=2),
@@ -127,6 +144,7 @@ class SalesByPaymentReportView(APIView):
             tenant_id=request.tenant_id,
             status=Sale.Status.COMPLETED,
         )
+        qs = _filter_sale_scope(qs, request)
 
         date_from = request.query_params.get("from")
         date_to = request.query_params.get("to")
@@ -145,7 +163,7 @@ class TopProductsReportView(APIView):
         summary="Productos mas vendidos",
         description="Top N productos por cantidad vendida. Filtra por rango de fechas y limite.",
         tags=["Reports"],
-        parameters=_date_params + [
+        parameters=_date_params + _scope_params + [
             OpenApiParameter(name="limit", description="Cantidad maxima de productos (default: 10)", type=int, required=False),
         ],
         responses={200: inline_serializer("TopProductsReport", fields={
@@ -166,6 +184,7 @@ class TopProductsReportView(APIView):
             sale__tenant_id=request.tenant_id,
             sale__status=Sale.Status.COMPLETED,
         )
+        qs = _filter_sale_scope(qs, request, prefix="sale__")
 
         date_from = request.query_params.get("from")
         date_to = request.query_params.get("to")
@@ -196,6 +215,9 @@ class CashboxSummaryReportView(APIView):
         ],
         responses={200: inline_serializer("CashboxSummaryReport", fields={
             "cashbox_uuid": serializers.UUIDField(),
+            "register_uuid": serializers.UUIDField(allow_null=True),
+            "register_name": serializers.CharField(allow_null=True),
+            "opened_by": serializers.UUIDField(),
             "status": serializers.CharField(),
             "opened_at": serializers.DateTimeField(),
             "closed_at": serializers.DateTimeField(allow_null=True),
@@ -213,6 +235,7 @@ class CashboxSummaryReportView(APIView):
         cashbox_id = request.query_params.get("cashbox_id")
 
         if cashbox_id:
+            cashbox_id = serializers.UUIDField().run_validation(cashbox_id)
             try:
                 cashbox = Cashbox.objects.get(
                     uuid=cashbox_id, tenant_id=request.tenant_id,
@@ -222,7 +245,9 @@ class CashboxSummaryReportView(APIView):
         else:
             # Default: current open cashbox
             cashbox = Cashbox.objects.filter(
-                tenant_id=request.tenant_id, status=Cashbox.Status.OPEN,
+                tenant_id=request.tenant_id,
+                opened_by=request.user,
+                status=Cashbox.Status.OPEN,
             ).first()
             if not cashbox:
                 return Response({"detail": "No open cashbox."}, status=404)
@@ -243,6 +268,9 @@ class CashboxSummaryReportView(APIView):
 
         return Response({
             "cashbox_uuid": cashbox.uuid,
+            "register_uuid": cashbox.register_id,
+            "register_name": cashbox.register.name if cashbox.register_id else None,
+            "opened_by": cashbox.opened_by_id,
             "status": cashbox.status,
             "opened_at": cashbox.opened_at,
             "closed_at": cashbox.closed_at,
@@ -259,9 +287,7 @@ class CashboxSummaryReportView(APIView):
     def _can_view_summary(request, cashbox):
         if request.user.role in ("ADMIN", "OWNER"):
             return True
-        if cashbox.status == Cashbox.Status.OPEN:
-            return True
-        return cashbox.opened_by_id == request.user.pk or cashbox.closed_by_id == request.user.pk
+        return cashbox.opened_by_id == request.user.pk
 
 
 class SalesByDateView(APIView):
@@ -274,7 +300,7 @@ class SalesByDateView(APIView):
         parameters=[
             OpenApiParameter(name="from", description="Fecha desde (YYYY-MM-DD)", type=str, required=False),
             OpenApiParameter(name="to", description="Fecha hasta (YYYY-MM-DD)", type=str, required=False),
-        ],
+        ] + _scope_params,
         responses={200: inline_serializer("SalesByDate", fields={
             "date": serializers.DateField(),
             "total": serializers.DecimalField(max_digits=12, decimal_places=2),
@@ -303,6 +329,7 @@ class SalesByDateView(APIView):
             created_at__date__gte=date_from,
             created_at__date__lte=date_to,
         )
+        qs = _filter_sale_scope(qs, request)
 
         by_date = (
             qs.annotate(day=TruncDate("created_at"))

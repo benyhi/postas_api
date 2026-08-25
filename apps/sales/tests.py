@@ -9,12 +9,14 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from apps.cashbox.models import Cashbox
 from apps.products.models import Product
 from apps.sales.models import Sale, SaleDetail
+from apps.tenants.models import Tenant
 from apps.users.models import User
 
 
 class SaleEmployeePermissionTests(TestCase):
     def setUp(self):
-        self.tenant_id = uuid.uuid4()
+        self.tenant = Tenant.objects.create(uuid=uuid.uuid4(), name="Sales tenant")
+        self.tenant_id = self.tenant.uuid
         self.owner = User.objects.create_user(
             tenant_id=self.tenant_id,
             username="owner",
@@ -26,6 +28,13 @@ class SaleEmployeePermissionTests(TestCase):
             tenant_id=self.tenant_id,
             username="employee",
             email="employee@example.com",
+            password="employee1234",
+            role=User.Role.EMPLOYEE,
+        )
+        self.other_employee = User.objects.create_user(
+            tenant_id=self.tenant_id,
+            username="other-employee",
+            email="other-employee@example.com",
             password="employee1234",
             role=User.Role.EMPLOYEE,
         )
@@ -51,8 +60,18 @@ class SaleEmployeePermissionTests(TestCase):
             difference=Decimal("0.00"),
             status=Cashbox.Status.CLOSED,
         )
+        self.other_open_cashbox = Cashbox.objects.create(
+            tenant_id=self.tenant_id,
+            opened_by=self.other_employee,
+            initial_amount=Decimal("500.00"),
+        )
         self.current_sale = self._create_sale(self.open_cashbox, Decimal("1500.00"))
         self.closed_cashbox_sale = self._create_sale(self.closed_cashbox, Decimal("2500.00"))
+        self.other_employee_sale = self._create_sale(
+            self.other_open_cashbox,
+            Decimal("3500.00"),
+            user=self.other_employee,
+        )
         self.client = APIClient()
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._access_token(self.employee)}")
         self.billing_patcher = patch("apps.platform_billing.enforcement.PlatformBillingClient")
@@ -81,6 +100,32 @@ class SaleEmployeePermissionTests(TestCase):
         )
         self.assertTrue(
             self.billing_client.check_and_consume.call_args.kwargs["idempotency_key"].startswith("sale:")
+        )
+
+    def test_mixed_payment_sale_is_assigned_to_authenticated_users_cashbox(self):
+        response = self.client.post(
+            "/api/v1/sales/",
+            {
+                "payments": [
+                    {"method": Sale.PaymentMethod.CASH, "amount": "500.00"},
+                    {"method": Sale.PaymentMethod.CARD, "amount": "1000.00"},
+                ],
+                "items": [{"product_id": str(self.product.uuid), "quantity": "1.000"}],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        sale = Sale.objects.get(uuid=response.data["uuid"])
+        self.assertEqual(sale.cashbox, self.open_cashbox)
+        self.assertEqual(sale.user, self.employee)
+        self.assertEqual(sale.payment_method, Sale.PaymentMethod.MIXED)
+        self.assertEqual(
+            sale.payments,
+            [
+                {"method": Sale.PaymentMethod.CASH, "amount": "500.00"},
+                {"method": Sale.PaymentMethod.CARD, "amount": "1000.00"},
+            ],
         )
 
     def test_sale_rolls_back_when_usage_is_not_confirmed(self):
@@ -114,6 +159,7 @@ class SaleEmployeePermissionTests(TestCase):
         sale_ids = {item["uuid"] for item in response.data["results"]}
         self.assertIn(str(self.current_sale.uuid), sale_ids)
         self.assertNotIn(str(self.closed_cashbox_sale.uuid), sale_ids)
+        self.assertNotIn(str(self.other_employee_sale.uuid), sale_ids)
 
     def test_employee_can_retrieve_current_cashbox_sale(self):
         response = self.client.get(f"/api/v1/sales/{self.current_sale.uuid}/")
@@ -136,10 +182,22 @@ class SaleEmployeePermissionTests(TestCase):
         self.assertIn(str(self.current_sale.uuid), sale_ids)
         self.assertIn(str(self.closed_cashbox_sale.uuid), sale_ids)
 
-    def _create_sale(self, cashbox, total):
+    def test_sale_from_closed_cashbox_cannot_be_cancelled(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._access_token(self.owner)}")
+        initial_stock = self.product.stock
+
+        response = self.client.post(f"/api/v1/sales/{self.closed_cashbox_sale.uuid}/cancel/")
+
+        self.assertEqual(response.status_code, 409)
+        self.closed_cashbox_sale.refresh_from_db()
+        self.product.refresh_from_db()
+        self.assertEqual(self.closed_cashbox_sale.status, Sale.Status.COMPLETED)
+        self.assertEqual(self.product.stock, initial_stock)
+
+    def _create_sale(self, cashbox, total, user=None):
         sale = Sale.objects.create(
             tenant_id=self.tenant_id,
-            user=self.employee,
+            user=user or self.employee,
             cashbox=cashbox,
             total=total,
             payment_method=Sale.PaymentMethod.CASH,

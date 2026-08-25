@@ -1,0 +1,67 @@
+Feature:
+Multiples terminales y cajas simultaneas
+
+Classification:
+large
+
+Context reviewed:
+- apps/cashbox models, serializers, views, urls, tests and migrations
+- apps/sales and apps/reports ownership and query paths
+- apps/platform_billing entitlement client
+- apps/audit model and logging helper
+- postas_platform_api billing seed, service, tests and documentation
+
+Current behavior:
+Cashbox era simultaneamente la caja fisica y la sesion. Solo podia existir una
+caja abierta por tenant; ventas, current, close y reportes elegian la primera
+caja abierta del tenant.
+
+Proposed behavior:
+CashRegister identifica una terminal fisica y Cashbox conserva la sesion. Un
+tenant puede operar varias terminales, con una sesion abierta por usuario y por
+terminal, hasta el limite cashboxes del plan.
+
+Implementation plan:
+1. Actualizar los limites cashboxes de Platform y mantener el contrato interno.
+2. Crear CashRegister y asociarlo nullable a Cashbox sin backfill historico.
+3. Implementar permisos, auditoria, apertura serializada y cierre propio/admin.
+4. Vincular ventas, anulaciones, listados y reportes a operador/sesion/terminal.
+5. Cubrir comportamiento SQLite y carreras reales PostgreSQL.
+6. Actualizar README, OpenAPI y Postman y ejecutar delivery_review.
+
+Files changed:
+- apps/audit/models.py and migration
+- apps/cashbox models, serializers, views, urls, admin, migrations and tests
+- apps/sales serializers, views and tests
+- apps/reports/views.py and tests
+- config/urls.py
+- README.md, schema.yml and Postman collection
+
+Tests created or updated:
+- apps/cashbox/tests.py
+- apps/cashbox/test_concurrency.py
+- apps/sales/tests.py
+- apps/reports/tests.py
+
+Documentation updated:
+- README.md
+- schema.yml
+- docs/multiples_terminales_cajas_simultaneas.txt
+- postas_platform_api/docs/billing.md
+- postas_platform_api/docs/cashbox_limits.txt
+
+Checks run:
+- manage.py check: passed
+- manage.py makemigrations --check --dry-run: passed
+- manage.py test apps.cashbox apps.sales apps.reports: passed (40 tests, 3 skipped on SQLite)
+
+Risks:
+- select_for_update serializa aperturas por tenant solo en motores que soportan bloqueos de fila, especialmente PostgreSQL.
+- La consulta a Platform ocurre dentro de la transaccion para mantener consistente el conteo proyectado.
+- El seed de Platform debe ejecutarse antes de habilitar el flujo.
+
+Important notes:
+- No se agregan sucursales ni inventarios por terminal.
+- Las terminales registradas no consumen limite; solo las sesiones abiertas.
+- Las sesiones historicas sin terminal no reciben backfill.
+- docs/sincronizar_env.txt es preexistente y no se modifica.

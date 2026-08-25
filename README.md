@@ -155,7 +155,7 @@ Mapa de guards actuales:
 | Crear producto | `products` | `resource_count = productos_activos + 1` |
 | Importar productos | `import_products` y `products` | Primero valida feature de importacion; luego calcula productos nuevos proyectados antes de escribir y valida el total activo proyectado |
 | Exportar productos | `export_products` | Valida antes de generar el CSV |
-| Abrir caja | `cashboxes` | `resource_count = cajas_abiertas + 1` |
+| Abrir caja | `cashboxes` | `resource_count = sesiones_abiertas_del_tenant + 1`; el limite representa simultaneidad, no terminales registradas |
 | Email de caja manual/automatico | `cashbox_email_report` | Usa `check-and-consume` antes de enviar |
 | Crear proveedor | `suppliers` | `resource_count = proveedores_activos + 1` |
 | Crear usuario | `users` | `resource_count = usuarios_activos + 1` |
@@ -429,12 +429,46 @@ La documentación incluye **ejemplos de request/response**, **filtros** y **pagi
 | **Categories** | `GET/POST /api/v1/categories/`, `GET/PATCH/DELETE /api/v1/categories/{uuid}/` | Lectura para usuarios autenticados; escritura ADMIN/OWNER |
 | **Products** | `GET/POST /api/v1/products/`, `POST /api/v1/products/import/`, `GET/PATCH/DELETE /api/v1/products/{uuid}/`, `GET /api/v1/products/search/` | Lectura para usuarios autenticados; escritura ADMIN/OWNER. Filtros: `category_id`, `low_stock` |
 | **TenantConfig** | `GET/PATCH /api/v1/tenant/config/` | Configuración del tenant actual. Incluye email para notificaciones de caja |
-| **Cashbox** | `POST /open/`, `POST /close/`, `GET /current/`, `GET /`, `GET /{uuid}/`, `POST /{uuid}/notify-email/` | EMPLOYEE puede abrir y ver solo caja actual; ADMIN/OWNER pueden listar/ver cajas |
-| **Sales** | `GET/POST /api/v1/sales/`, `GET /{uuid}/`, `POST /{uuid}/cancel/` | EMPLOYEE puede vender y ver ventas de la caja actual; ADMIN/OWNER ven todo. Filtros: `user_id`, `payment_method`, `from`, `to` |
+| **Cash registers** | `GET/POST /api/v1/cash-registers/`, `GET/PATCH /api/v1/cash-registers/{uuid}/` | Todos listan terminales activas; ADMIN/OWNER crean, renombran y desactivan. No hay borrado fisico |
+| **Cashbox** | `POST /open/`, `POST /close/`, `GET /current/`, `GET /`, `GET /{uuid}/`, `POST /{uuid}/notify-email/` | `open/` exige `register_id`; `current/` y `close/` usan la sesion propia. ADMIN/OWNER pueden cerrar otra sesion enviando `cashbox_id` |
+| **Sales** | `GET/POST /api/v1/sales/`, `GET /{uuid}/`, `POST /{uuid}/cancel/` | EMPLOYEE vende y consulta solo su sesion abierta; ADMIN/OWNER ven el tenant. Filtros: `user_id`, `cashbox_id`, `register_id`, `payment_method`, `from`, `to`. Una venta de caja cerrada no puede anularse |
 | **Reports** | `GET sales/daily/`, `GET sales/by-date/`, `GET sales/by-payment/`, `GET products/top/`, `GET cashbox/summary/` | Reportes con filtros de fechas y enforcement de billing por feature |
 | **Audit** | `GET /api/v1/audit/` | Logs de auditoría. Filtros: `action`, `entity`, `user`, `timestamp` |
 | **Suppliers** | `GET/POST /api/v1/suppliers/`, `GET/PATCH/DELETE /api/v1/suppliers/{uuid}/` | CRUD de proveedores (ADMIN/OWNER). DELETE es soft delete |
 | **Suppliers** | `GET/POST /api/v1/product-suppliers/`, `GET/PATCH/DELETE /api/v1/product-suppliers/{uuid}/` | Historial de relaciones producto-proveedor. Filtros: `product`, `is_current` |
+
+### Terminales y sesiones de caja
+
+`CashRegister` representa una terminal fisica persistente y `Cashbox` una
+sesion de apertura/cierre. Los nombres de terminal son unicos por tenant. No se
+puede desactivar una terminal con una sesion abierta y no existe borrado
+fisico.
+
+```http
+POST /api/v1/cashboxes/open/
+Content-Type: application/json
+
+{
+  "register_id": "<uuid-terminal>",
+  "initial_amount": "5000.00"
+}
+```
+
+Cada usuario puede tener una sola sesion abierta y cada terminal admite una
+sola sesion abierta. Las sesiones historicas migradas conservan
+`register = null`; siguen siendo consultables y cerrables, pero la API no crea
+nuevas sesiones sin `register_id`.
+
+`POST /api/v1/cashboxes/close/` sin `cashbox_id` cierra la sesion del usuario
+autenticado. ADMIN/OWNER pueden enviar `cashbox_id` para un cierre
+administrativo. El cierre suma la parte `CASH` de pagos mixtos y nunca consulta
+el entitlement de apertura, por lo que un downgrade no deja una sesion
+atrapada.
+
+Las aperturas bloquean la fila del tenant con `select_for_update` antes de
+contar sesiones y validar billing. Esa serializacion es efectiva en PostgreSQL;
+SQLite se conserva para pruebas funcionales, pero no ofrece la misma garantia
+de carreras.
 | **Suppliers** | `POST /api/v1/product-suppliers/switch/` | Cambia el proveedor activo de un producto (desactiva los anteriores) |
 | **Cloud** | `GET/POST/DELETE /api/v1/cloud/images/`, `GET/PUT /api/v1/cloud/images/{key}/` | CRUD de imágenes (autenticado, cualquier rol) |
 | **Cloud** | `GET /api/v1/cloud/public/images/`, `GET /api/v1/cloud/public/images/{key}/` | Lectura pública de imágenes (sin autenticación) |

@@ -21,6 +21,7 @@ class AuditLog(models.Model):
         CATEGORY = "CATEGORY", "Category"
         SALE = "SALE", "Sale"
         CASHBOX = "CASHBOX", "Cashbox"
+        CASH_REGISTER = "CASH_REGISTER", "Cash register"
         TENANT_CONFIG = "TENANT_CONFIG", "Tenant config"
 
     uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
