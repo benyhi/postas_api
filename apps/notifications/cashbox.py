@@ -89,8 +89,7 @@ def _cashbox_bodies(cashbox, event):
     event_label = "cierre" if event == "closed" else "apertura"
     title_event_label = "cerrada" if event == "closed" else "abierta"
     rows = [
-        {"label": "Caja", "value": str(cashbox.uuid)},
-        {"label": "Tenant", "value": str(cashbox.tenant_id)},
+        {"label": "Terminal", "value": cashbox.register.name if cashbox.register else "-"},
         {"label": "Estado", "value": cashbox.status},
         {"label": "Abierta por", "value": _user_label(cashbox.opened_by)},
         {"label": "Fecha de apertura", "value": _format_datetime(cashbox.opened_at)},
@@ -123,13 +122,13 @@ def _cashbox_bodies(cashbox, event):
 def _format_datetime(value):
     if value is None:
         return "-"
-    return timezone.localtime(value).strftime("%Y-%m-%d %H:%M:%S %Z")
+    return timezone.localtime(value).strftime("%d-%m-%y | %H:%M hs.")
 
 
 def _format_money(value):
     if value is None:
         return "-"
-    return f"{value:.2f}"
+    return f"${value:.2f}"
 
 
 def _user_label(user):

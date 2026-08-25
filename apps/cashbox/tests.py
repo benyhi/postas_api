@@ -1,11 +1,11 @@
 import uuid
+from datetime import datetime, timezone as datetime_timezone
 from decimal import Decimal
 from unittest.mock import patch
 
 from django.core import mail
 from django.db import IntegrityError, transaction
 from django.test import TestCase, override_settings
-from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -57,12 +57,15 @@ class CashboxEmailNotificationTests(TestCase):
         self.billing_client.check_and_consume.return_value = {"allowed": True, "recorded": True}
 
     def test_service_sends_open_notification_to_tenant_owner(self):
+        opened_at = datetime(2026, 6, 16, 22, 24, 31, tzinfo=datetime_timezone.utc)
         cashbox = Cashbox.objects.create(
             tenant_id=self.tenant_id,
             register=self.register,
             opened_by=self.employee,
             initial_amount=Decimal("1000.00"),
         )
+        Cashbox.objects.filter(pk=cashbox.pk).update(opened_at=opened_at)
+        cashbox.refresh_from_db()
 
         result = send_cashbox_notification_email(cashbox)
 
@@ -72,11 +75,26 @@ class CashboxEmailNotificationTests(TestCase):
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, ["notifications@example.com"])
         self.assertIn("Caja abierta", mail.outbox[0].subject)
-        self.assertIn(str(cashbox.uuid), mail.outbox[0].body)
-        self.assertIn("Monto inicial: 1000.00", mail.outbox[0].body)
+        self.assertIn("Terminal: Caja principal", mail.outbox[0].body)
+        self.assertNotIn("\nCaja:", mail.outbox[0].body)
+        self.assertNotIn("\nTenant:", mail.outbox[0].body)
+        self.assertNotIn(str(cashbox.uuid), mail.outbox[0].body)
+        self.assertNotIn(str(self.tenant_id), mail.outbox[0].body)
+        self.assertIn("Fecha de apertura: 16-06-26 | 22:24 hs.", mail.outbox[0].body)
+        self.assertIn("Monto inicial: $1000.00", mail.outbox[0].body)
+        self.assertNotIn("Fecha de cierre:", mail.outbox[0].body)
+        self.assertNotIn("Monto final:", mail.outbox[0].body)
         html_body = _html_body(mail.outbox[0])
-        self.assertIn(str(cashbox.uuid), html_body)
+        self.assertIn("Caja principal", html_body)
+        self.assertNotRegex(html_body, r">\s*Caja\s*</td>")
+        self.assertNotRegex(html_body, r">\s*Tenant\s*</td>")
+        self.assertNotIn(str(cashbox.uuid), html_body)
+        self.assertNotIn(str(self.tenant_id), html_body)
+        self.assertIn("16-06-26 | 22:24 hs.", html_body)
         self.assertIn("Monto inicial", html_body)
+        self.assertIn("$1000.00", html_body)
+        self.assertNotIn("Fecha de cierre", html_body)
+        self.assertNotIn("Monto final", html_body)
         delivery = EmailDelivery.objects.get()
         self.assertEqual(delivery.provider, EmailDelivery.Provider.DJANGO)
         self.assertEqual(delivery.status, EmailDelivery.Status.SENT)
@@ -108,7 +126,7 @@ class CashboxEmailNotificationTests(TestCase):
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, ["notifications@example.com"])
         self.assertIn("Caja abierta", mail.outbox[0].subject)
-        self.assertIn("Monto inicial: 1000.00", mail.outbox[0].body)
+        self.assertIn("Monto inicial: $1000.00", mail.outbox[0].body)
         self.billing_client.check_and_consume.assert_called()
         cashbox = Cashbox.objects.get(tenant_id=self.tenant_id)
         consume_call = self.billing_client.check_and_consume.call_args
@@ -191,22 +209,26 @@ class CashboxEmailNotificationTests(TestCase):
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, ["notifications@example.com"])
         self.assertIn("Caja cerrada", mail.outbox[0].subject)
-        self.assertIn("Monto final: 1000.00", mail.outbox[0].body)
+        self.assertIn("Terminal: Caja principal", mail.outbox[0].body)
+        self.assertIn("Monto final: $1000.00", mail.outbox[0].body)
 
     def test_endpoint_sends_closed_notification_for_cashbox(self):
+        opened_at = datetime(2026, 6, 16, 22, 24, 31, tzinfo=datetime_timezone.utc)
+        closed_at = datetime(2026, 6, 16, 22, 26, 2, tzinfo=datetime_timezone.utc)
         cashbox = Cashbox.objects.create(
             tenant_id=self.tenant_id,
             register=self.register,
             opened_by=self.employee,
             closed_by=self.owner,
-            opened_at=timezone.now(),
-            closed_at=timezone.now(),
-            initial_amount=Decimal("1000.00"),
-            final_amount=Decimal("1300.00"),
-            expected_amount=Decimal("1250.00"),
-            difference=Decimal("50.00"),
+            closed_at=closed_at,
+            initial_amount=Decimal("15400.00"),
+            final_amount=Decimal("103194.00"),
+            expected_amount=Decimal("118594.00"),
+            difference=Decimal("-15400.00"),
             status=Cashbox.Status.CLOSED,
         )
+        Cashbox.objects.filter(pk=cashbox.pk).update(opened_at=opened_at)
+        cashbox.refresh_from_db()
         client = APIClient()
         client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._access_token(self.owner)}")
 
@@ -218,12 +240,47 @@ class CashboxEmailNotificationTests(TestCase):
         self.assertEqual(response.data["recipients_count"], 1)
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn("Caja cerrada", mail.outbox[0].subject)
-        self.assertIn("Monto final: 1300.00", mail.outbox[0].body)
-        self.assertIn("Diferencia: 50.00", mail.outbox[0].body)
+        self.assertIn("Terminal: Caja principal", mail.outbox[0].body)
+        self.assertNotIn("\nCaja:", mail.outbox[0].body)
+        self.assertNotIn("\nTenant:", mail.outbox[0].body)
+        self.assertIn("Fecha de apertura: 16-06-26 | 22:24 hs.", mail.outbox[0].body)
+        self.assertIn("Fecha de cierre: 16-06-26 | 22:26 hs.", mail.outbox[0].body)
+        self.assertIn("Monto inicial: $15400.00", mail.outbox[0].body)
+        self.assertIn("Monto final: $103194.00", mail.outbox[0].body)
+        self.assertIn("Monto esperado: $118594.00", mail.outbox[0].body)
+        self.assertIn("Diferencia: $-15400.00", mail.outbox[0].body)
         html_body = _html_body(mail.outbox[0])
-        self.assertIn("Monto final", html_body)
-        self.assertIn("1300.00", html_body)
-        self.assertIn("Diferencia", html_body)
+        self.assertIn("Caja principal", html_body)
+        self.assertNotRegex(html_body, r">\s*Caja\s*</td>")
+        self.assertNotRegex(html_body, r">\s*Tenant\s*</td>")
+        self.assertNotIn(str(cashbox.uuid), html_body)
+        self.assertNotIn(str(self.tenant_id), html_body)
+        for expected_value in (
+            "16-06-26 | 22:24 hs.",
+            "16-06-26 | 22:26 hs.",
+            "$15400.00",
+            "$103194.00",
+            "$118594.00",
+            "$-15400.00",
+        ):
+            self.assertIn(expected_value, html_body)
+
+    def test_historical_cashbox_without_register_uses_terminal_fallback(self):
+        cashbox = Cashbox.objects.create(
+            tenant_id=self.tenant_id,
+            opened_by=self.employee,
+            initial_amount=Decimal("1000.00"),
+        )
+
+        send_cashbox_notification_email(cashbox)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("Terminal: -", mail.outbox[0].body)
+        html_body = _html_body(mail.outbox[0])
+        self.assertRegex(
+            html_body,
+            r">\s*Terminal\s*</td>\s*<td[^>]*>\s*-\s*</td>",
+        )
 
     def test_manual_notification_blocks_when_email_usage_limit_is_exceeded(self):
         cashbox = Cashbox.objects.create(

@@ -1,0 +1,24 @@
+Feature:
+Formato del email de apertura y cierre de caja
+
+Summary:
+Los emails muestran el nombre de la terminal, omiten los identificadores de caja y tenant, y presentan fechas y montos con formato legible.
+
+Files changed:
+- apps/notifications/cashbox.py
+- apps/cashbox/tests.py
+
+Tests created or updated:
+- apps/cashbox/tests.py
+
+Documentation updated:
+- docs/formato_email_caja.txt
+
+Checks run:
+- manage.py test apps.cashbox.tests.CashboxEmailNotificationTests: passed (9 tests).
+- manage.py test apps.cashbox.tests: passed (24 tests).
+- manage.py check: passed.
+- git diff --check (feature files): passed.
+
+Important notes:
+- Las cajas historicas sin terminal asociada muestran "-" como nombre de terminal.
