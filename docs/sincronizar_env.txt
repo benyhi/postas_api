@@ -1,0 +1,22 @@
+Feature:
+Sincronizar .env con .env-example
+
+Summary:
+Se agregaron a .env las variables presentes en .env-example que faltaban, sin reemplazar ni eliminar la configuracion existente.
+
+Files changed:
+- .env
+- docs/sincronizar_env.txt
+
+Tests created or updated:
+- None
+
+Documentation updated:
+- docs/sincronizar_env.txt
+
+Checks run:
+- Comparacion de claves y preservacion de valores existentes: passed
+
+Important notes:
+- Las variables nuevas usan los defaults de .env-example.
+- EMAIL_FALLBACK_PROVIDER conserva el valor equivalente de EMAIL_PROVIDER_FALLBACK.
