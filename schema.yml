@@ -51,7 +51,60 @@ paths:
       responses:
         '204':
           description: No response body
+  /api/v1/arca/configuration/sales-points/:
+    post:
+      operationId: v1_arca_configuration_sales_points_create
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ArcaSalesPointDiscoveryRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ArcaSalesPointDiscoveryRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ArcaSalesPointDiscoveryRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArcaSalesPointList'
+          description: ''
   /api/v1/arca/invoices/:
+    get:
+      operationId: v1_arca_invoices_retrieve
+      parameters:
+      - in: query
+        name: page
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+      - in: query
+        name: page_size
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArcaInvoicePage'
+          description: ''
     post:
       operationId: v1_arca_invoices_create
       tags:
@@ -2284,77 +2337,27 @@ components:
     ArcaExplicitInvoiceCreateRequest:
       type: object
       properties:
-        external_id:
-          type: string
-          minLength: 1
-          maxLength: 160
         sale_id:
           type: string
           format: uuid
-          nullable: true
         receiver:
           $ref: '#/components/schemas/ArcaReceiverRequest'
-        invoice_date:
-          type: string
-          format: date
-        service_start_date:
-          type: string
-          format: date
-          nullable: true
-        service_end_date:
-          type: string
-          format: date
-          nullable: true
-        payment_due_date:
-          type: string
-          format: date
-          nullable: true
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/ArcaItemRequest'
         voucher_number:
           type: integer
           minimum: 1
       required:
-      - external_id
-      - items
+      - sale_id
       - voucher_number
     ArcaInvoiceCreateRequest:
       type: object
       properties:
-        external_id:
-          type: string
-          minLength: 1
-          maxLength: 160
         sale_id:
           type: string
           format: uuid
-          nullable: true
         receiver:
           $ref: '#/components/schemas/ArcaReceiverRequest'
-        invoice_date:
-          type: string
-          format: date
-        service_start_date:
-          type: string
-          format: date
-          nullable: true
-        service_end_date:
-          type: string
-          format: date
-          nullable: true
-        payment_due_date:
-          type: string
-          format: date
-          nullable: true
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/ArcaItemRequest'
       required:
-      - external_id
-      - items
+      - sale_id
     ArcaInvoiceError:
       type: object
       properties:
@@ -2367,6 +2370,28 @@ components:
       required:
       - code
       - message
+    ArcaInvoicePage:
+      type: object
+      properties:
+        count:
+          type: integer
+        next:
+          type: string
+          format: uri
+          nullable: true
+        previous:
+          type: string
+          format: uri
+          nullable: true
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ArcaInvoiceResponse'
+      required:
+      - count
+      - next
+      - previous
+      - results
     ArcaInvoiceResponse:
       type: object
       properties:
@@ -2464,25 +2489,6 @@ components:
       - updated_at
       - voucher_number
       - voucher_type
-    ArcaItemRequest:
-      type: object
-      properties:
-        description:
-          type: string
-          minLength: 1
-          maxLength: 255
-        quantity:
-          type: string
-          format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
-        final_unit_price:
-          type: string
-          format: decimal
-          pattern: ^-?\d{0,13}(?:\.\d{0,2})?$
-      required:
-      - description
-      - final_unit_price
-      - quantity
     ArcaLastVoucherResponse:
       type: object
       properties:
@@ -2516,6 +2522,60 @@ components:
           type: integer
           minimum: 1
           default: 5
+    ArcaSalesPoint:
+      type: object
+      properties:
+        number:
+          type: integer
+        emission_type:
+          type: string
+        blocked:
+          type: boolean
+        deactivation_date:
+          type: string
+          format: date
+          nullable: true
+      required:
+      - blocked
+      - deactivation_date
+      - emission_type
+      - number
+    ArcaSalesPointDiscoveryRequest:
+      type: object
+      properties:
+        arca_environment:
+          $ref: '#/components/schemas/ArcaEnvironmentB91Enum'
+        arca_cuit:
+          type: string
+          minLength: 1
+          pattern: ^\d{11}$
+        certificate:
+          type: string
+          writeOnly: true
+          minLength: 1
+        private_key:
+          type: string
+          writeOnly: true
+          minLength: 1
+        access_token:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - access_token
+      - arca_cuit
+      - arca_environment
+      - certificate
+      - private_key
+    ArcaSalesPointList:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ArcaSalesPoint'
+      required:
+      - results
     AuditLog:
       type: object
       properties:
@@ -3686,6 +3746,11 @@ components:
         payments: {}
         status:
           $ref: '#/components/schemas/SaleReadStatusEnum'
+        register:
+          allOf:
+          - $ref: '#/components/schemas/SaleRegister'
+          readOnly: true
+          nullable: true
         created_at:
           type: string
           format: date-time
@@ -3709,6 +3774,7 @@ components:
       - invoice_status
       - invoice_tracking_id
       - payment_method
+      - register
       - tenant_id
       - total
       - user
@@ -3722,6 +3788,19 @@ components:
       description: |-
         * `COMPLETED` - Completed
         * `CANCELLED` - Cancelled
+    SaleRegister:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          readOnly: true
+      required:
+      - name
+      - uuid
     SalesByDate:
       type: object
       properties:

@@ -57,3 +57,4 @@ Important notes:
 - Cambiar arca_environment no modifica solicitudes ya creadas.
 - La automatizacion solo puede activarse con entitlement, perfil validado y concepto Productos.
 - Docker Compose inicia arca_outbox_worker y postas_platform_arca_worker como procesos separados.
+- Los contratos de descubrimiento de puntos de venta, listado paginado y facturacion manual basada en ventas se documentan en docs/arca_sales_improvements.txt.

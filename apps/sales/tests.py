@@ -6,7 +6,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from apps.cashbox.models import Cashbox
+from apps.cashbox.models import Cashbox, CashRegister
 from apps.products.models import Product
 from apps.sales.models import Sale, SaleDetail
 from apps.tenants.models import Tenant
@@ -45,8 +45,13 @@ class SaleEmployeePermissionTests(TestCase):
             cost=Decimal("900.00"),
             stock=Decimal("10.000"),
         )
+        self.register = CashRegister.objects.create(
+            tenant_id=self.tenant_id,
+            name="Caja principal",
+        )
         self.open_cashbox = Cashbox.objects.create(
             tenant_id=self.tenant_id,
+            register=self.register,
             opened_by=self.employee,
             initial_amount=Decimal("1000.00"),
         )
@@ -93,6 +98,10 @@ class SaleEmployeePermissionTests(TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["cashbox"], self.open_cashbox.uuid)
         self.assertEqual(response.data["user"], self.employee.uuid)
+        self.assertEqual(
+            response.data["register"],
+            {"uuid": str(self.register.uuid), "name": "Caja principal"},
+        )
         self.billing_client.check_and_consume.assert_called_once()
         self.assertEqual(
             self.billing_client.check_and_consume.call_args.args[1],
@@ -160,12 +169,23 @@ class SaleEmployeePermissionTests(TestCase):
         self.assertIn(str(self.current_sale.uuid), sale_ids)
         self.assertNotIn(str(self.closed_cashbox_sale.uuid), sale_ids)
         self.assertNotIn(str(self.other_employee_sale.uuid), sale_ids)
+        current = next(item for item in response.data["results"] if item["uuid"] == str(self.current_sale.uuid))
+        self.assertEqual(current["register"]["uuid"], str(self.register.uuid))
 
     def test_employee_can_retrieve_current_cashbox_sale(self):
         response = self.client.get(f"/api/v1/sales/{self.current_sale.uuid}/")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["uuid"], str(self.current_sale.uuid))
+        self.assertEqual(response.data["register"]["name"], "Caja principal")
+
+    def test_historical_sale_without_register_returns_null(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._access_token(self.owner)}")
+
+        response = self.client.get(f"/api/v1/sales/{self.closed_cashbox_sale.uuid}/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.data["register"])
 
     def test_employee_cannot_retrieve_sale_from_closed_cashbox(self):
         response = self.client.get(f"/api/v1/sales/{self.closed_cashbox_sale.uuid}/")

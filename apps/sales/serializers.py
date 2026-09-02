@@ -136,9 +136,15 @@ class SaleDetailReadSerializer(serializers.ModelSerializer):
         fields = ["uuid", "product", "product_name", "quantity", "price", "subtotal"]
 
 
+class SaleRegisterSerializer(serializers.Serializer):
+    uuid = serializers.UUIDField(read_only=True)
+    name = serializers.CharField(read_only=True)
+
+
 class SaleReadSerializer(serializers.ModelSerializer):
     details = SaleDetailReadSerializer(many=True, read_only=True)
     user_username = serializers.CharField(source="user.username", read_only=True)
+    register = SaleRegisterSerializer(source="cashbox.register", read_only=True, allow_null=True)
     invoice_status = serializers.SerializerMethodField()
     invoice_tracking_id = serializers.SerializerMethodField()
 
@@ -159,5 +165,5 @@ class SaleReadSerializer(serializers.ModelSerializer):
         fields = [
             "uuid", "tenant_id", "user", "user_username",
             "cashbox", "total", "payment_method", "payments", "status",
-            "created_at", "details", "invoice_status", "invoice_tracking_id",
+            "register", "created_at", "details", "invoice_status", "invoice_tracking_id",
         ]

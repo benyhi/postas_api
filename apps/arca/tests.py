@@ -14,7 +14,7 @@ from apps.arca.outbox import ArcaOutboxWorker
 from apps.cashbox.models import Cashbox
 from apps.platform_billing.client import PlatformBillingError
 from apps.products.models import Product
-from apps.sales.models import Sale
+from apps.sales.models import Sale, SaleDetail
 from apps.tenants.models import Tenant, TenantConfig
 from apps.users.models import User
 
@@ -85,6 +85,25 @@ class ArcaApiTests(TestCase):
 
     def authenticate(self, user):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(user)}")
+
+    def create_sale(self, *, user=None, tenant_id=None, status=Sale.Status.COMPLETED):
+        sale = Sale.objects.create(
+            tenant_id=tenant_id or self.tenant_id,
+            user=user or self.employee,
+            cashbox=self.cashbox,
+            total=Decimal("242.00"),
+            payment_method=Sale.PaymentMethod.CASH,
+            payments=[{"method": "CASH", "amount": "242.00"}],
+            status=status,
+        )
+        SaleDetail.objects.create(
+            sale=sale,
+            product=self.product,
+            quantity=Decimal("2.000"),
+            price=Decimal("121.00"),
+            subtotal=Decimal("242.00"),
+        )
+        return sale
 
     def test_outbox_worker_command_fails_closed_without_postgresql(self):
         with self.assertRaisesRegex(CommandError, "requiere PostgreSQL"):
@@ -216,7 +235,9 @@ class ArcaApiTests(TestCase):
     @patch("apps.arca.views.PlatformArcaClient")
     def test_invoice_ignores_client_tenant_and_injects_jwt_tenant_actor(self, client_class):
         platform = client_class.return_value
+        platform.get_by_sale.side_effect = PlatformBillingError("not found", status_code=404)
         platform.create_invoice.return_value = {"id": 1, "status": "pending", "actor_id": str(self.employee.uuid)}
+        sale = self.create_sale()
         self.authenticate(self.employee)
 
         response = self.client.post(
@@ -225,6 +246,7 @@ class ArcaApiTests(TestCase):
                 "tenant_id": str(self.other_tenant_id),
                 "environment": "production",
                 "external_id": "manual-1",
+                "sale_id": str(sale.uuid),
                 "items": [{"description": "Producto", "quantity": "1", "final_unit_price": "121.00"}],
             },
             format="json",
@@ -236,7 +258,359 @@ class ArcaApiTests(TestCase):
         self.assertEqual(str(args[0]), str(self.tenant_id))
         self.assertEqual(args[1], "development")
         self.assertEqual(payload["actor_id"], str(self.employee.uuid))
+        self.assertEqual(payload["external_id"], str(sale.uuid))
+        self.assertEqual(payload["sale_id"], str(sale.uuid))
+        self.assertEqual(payload["items"], [{
+            "description": self.product.name,
+            "quantity": "2.000",
+            "final_unit_price": "121.00",
+        }])
+        self.assertEqual(payload["invoice_date"], sale.created_at.date().isoformat())
         self.assertNotIn("tenant_id", payload)
+        tracking = FiscalOutboxRequest.objects.get(sale=sale)
+        self.assertEqual(tracking.platform_invoice_id, 1)
+        self.assertEqual(tracking.status, FiscalOutboxRequest.Status.SENT)
+
+    @patch("apps.arca.views.PlatformArcaClient")
+    def test_sales_point_discovery_is_owner_only_and_never_echoes_secrets(self, client_class):
+        platform = client_class.return_value
+        platform.discover_sales_points.return_value = {
+            "results": [{"number": 1, "emission_type": "CAE", "blocked": False, "deactivation_date": None}]
+        }
+        payload = {
+            "arca_environment": "development",
+            "arca_cuit": "20111111112",
+            "certificate": "certificate-secret",
+            "private_key": "private-key-secret",
+            "access_token": "access-token-secret",
+        }
+
+        self.authenticate(self.employee)
+        self.assertEqual(
+            self.client.post("/api/v1/arca/configuration/sales-points/", payload, format="json").status_code,
+            403,
+        )
+        self.authenticate(self.admin)
+        self.assertEqual(
+            self.client.post("/api/v1/arca/configuration/sales-points/", payload, format="json").status_code,
+            403,
+        )
+        self.authenticate(self.owner)
+        response = self.client.post(
+            "/api/v1/arca/configuration/sales-points/", payload, format="json"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["results"][0]["number"], 1)
+        serialized = str(response.data)
+        self.assertNotIn("certificate-secret", serialized)
+        self.assertNotIn("private-key-secret", serialized)
+        self.assertNotIn("access-token-secret", serialized)
+        platform.discover_sales_points.assert_called_once_with(str(self.tenant_id), payload)
+
+    @patch("apps.arca.views.PlatformArcaClient")
+    def test_invoice_list_is_admin_owner_only_and_uses_platform_pagination(self, client_class):
+        platform = client_class.return_value
+        platform.list_invoices.return_value = {"count": 42, "results": [{"id": 42, "sale_id": None}]}
+
+        self.authenticate(self.employee)
+        self.assertEqual(self.client.get("/api/v1/arca/invoices/").status_code, 403)
+        self.authenticate(self.admin)
+        response = self.client.get("/api/v1/arca/invoices/?page=2&page_size=20")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 42)
+        self.assertIn("page=3", response.data["next"])
+        self.assertIn("page=1", response.data["previous"])
+        platform.list_invoices.assert_called_once_with(str(self.tenant_id), offset=20, limit=20)
+
+        too_large = self.client.get("/api/v1/arca/invoices/?page_size=101")
+        self.assertEqual(too_large.status_code, 400)
+
+    @patch("apps.arca.views.PlatformArcaClient")
+    def test_invoice_list_propagates_platform_error_contract(self, client_class):
+        client_class.return_value.list_invoices.side_effect = PlatformBillingError(
+            "unavailable",
+            status_code=503,
+            response_data={
+                "detail": {"code": "arca_unavailable", "message": "ARCA no disponible."}
+            },
+        )
+        self.authenticate(self.owner)
+
+        response = self.client.get("/api/v1/arca/invoices/")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.data["code"], "arca_unavailable")
+
+    @patch("apps.arca.views.PlatformArcaClient")
+    def test_manual_invoice_rejects_cancelled_foreign_and_pending_automatic_sales(self, client_class):
+        platform = client_class.return_value
+        platform.get_by_sale.side_effect = PlatformBillingError("not found", status_code=404)
+        cancelled = self.create_sale(status=Sale.Status.CANCELLED)
+        admin_sale = self.create_sale(user=self.admin)
+        pending = self.create_sale()
+        FiscalOutboxRequest.objects.create(
+            tenant_id=self.tenant_id,
+            sale=pending,
+            created_by=self.employee,
+            environment="development",
+            external_id=str(pending.uuid),
+            payload_snapshot={},
+        )
+        self.authenticate(self.employee)
+
+        self.assertEqual(
+            self.client.post("/api/v1/arca/invoices/", {"sale_id": str(cancelled.uuid)}, format="json").status_code,
+            409,
+        )
+        self.assertEqual(
+            self.client.post("/api/v1/arca/invoices/", {"sale_id": str(admin_sale.uuid)}, format="json").status_code,
+            403,
+        )
+        pending_response = self.client.post(
+            "/api/v1/arca/invoices/", {"sale_id": str(pending.uuid)}, format="json"
+        )
+        self.assertEqual(pending_response.status_code, 409)
+        self.assertEqual(pending_response.data["code"], "automatic_invoice_pending")
+
+    @patch("apps.arca.views.PlatformArcaClient")
+    def test_explicit_invoice_completes_receiver_identification_and_updates_tracking(self, client_class):
+        sale = self.create_sale()
+        platform = client_class.return_value
+        platform.get_by_sale.return_value = {
+            "id": 7,
+            "status": "receiver_identification_required",
+            "sale_id": str(sale.uuid),
+        }
+        platform.create_invoice.return_value = {
+            "id": 7,
+            "status": "pending",
+            "sale_id": str(sale.uuid),
+        }
+        self.authenticate(self.admin)
+
+        response = self.client.post(
+            "/api/v1/arca/invoices/explicit/",
+            {
+                "sale_id": str(sale.uuid),
+                "voucher_number": 15,
+                "receiver": {"doc_type": 80, "doc_number": "20111111112", "iva_condition_id": 1},
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 202)
+        payload = platform.create_invoice.call_args.args[2]
+        self.assertEqual(payload["voucher_number"], 15)
+        self.assertEqual(payload["external_id"], str(sale.uuid))
+        tracking = FiscalOutboxRequest.objects.get(sale=sale)
+        self.assertEqual(tracking.invoice_status, "pending")
+
+    @patch("apps.arca.views.PlatformArcaClient")
+    def test_explicit_invoice_reuses_legacy_platform_external_id(self, client_class):
+        sale = self.create_sale()
+        platform = client_class.return_value
+        platform.get_by_sale.return_value = {
+            "id": 17,
+            "status": "receiver_identification_required",
+            "sale_id": str(sale.uuid),
+            "external_id": "legacy-manual-reference",
+        }
+        platform.create_invoice.return_value = {
+            "id": 17,
+            "status": "pending",
+            "sale_id": str(sale.uuid),
+            "external_id": "legacy-manual-reference",
+        }
+        self.authenticate(self.owner)
+
+        response = self.client.post(
+            "/api/v1/arca/invoices/explicit/",
+            {
+                "sale_id": str(sale.uuid),
+                "voucher_number": 21,
+                "receiver": {"doc_type": 80, "doc_number": "20111111112", "iva_condition_id": 1},
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 202)
+        payload = platform.create_invoice.call_args.args[2]
+        self.assertEqual(payload["external_id"], "legacy-manual-reference")
+        tracking = FiscalOutboxRequest.objects.get(sale=sale)
+        self.assertEqual(tracking.external_id, "legacy-manual-reference")
+
+    @patch("apps.arca.views.PlatformArcaClient")
+    def test_sending_automatic_request_blocks_explicit_completion(self, client_class):
+        sale = self.create_sale()
+        tracking = FiscalOutboxRequest.objects.create(
+            tenant_id=self.tenant_id,
+            sale=sale,
+            created_by=self.employee,
+            environment="development",
+            external_id=str(sale.uuid),
+            payload_snapshot={"receiver": {}},
+            status=FiscalOutboxRequest.Status.SENDING,
+        )
+        platform = client_class.return_value
+        platform.get_by_sale.return_value = {
+            "id": 18,
+            "status": "receiver_identification_required",
+            "sale_id": str(sale.uuid),
+            "external_id": str(sale.uuid),
+        }
+        self.authenticate(self.owner)
+
+        response = self.client.post(
+            "/api/v1/arca/invoices/explicit/",
+            {
+                "sale_id": str(sale.uuid),
+                "voucher_number": 22,
+                "receiver": {"doc_type": 80, "doc_number": "20111111112", "iva_condition_id": 1},
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "automatic_invoice_pending")
+        platform.create_invoice.assert_not_called()
+        tracking.refresh_from_db()
+        self.assertEqual(tracking.status, FiscalOutboxRequest.Status.SENDING)
+
+    @patch("apps.arca.views.PlatformArcaClient")
+    def test_invoice_retry_reuses_platform_sale_and_reconstructs_local_tracking(self, client_class):
+        sale = self.create_sale()
+        platform = client_class.return_value
+        existing = {
+            "id": 33,
+            "status": "approved",
+            "sale_id": str(sale.uuid),
+            "external_id": str(sale.uuid),
+        }
+        platform.get_by_sale.return_value = existing
+        platform.create_invoice.return_value = existing
+        self.authenticate(self.owner)
+
+        first = self.client.post(
+            "/api/v1/arca/invoices/",
+            {"sale_id": str(sale.uuid)},
+            format="json",
+        )
+        second = self.client.post(
+            "/api/v1/arca/invoices/",
+            {"sale_id": str(sale.uuid)},
+            format="json",
+        )
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 202)
+        platform.create_invoice.assert_called_once()
+        tracking = FiscalOutboxRequest.objects.get(sale=sale)
+        self.assertEqual(tracking.platform_invoice_id, 33)
+        self.assertEqual(tracking.invoice_status, "approved")
+
+    @patch("apps.arca.views.PlatformArcaClient")
+    def test_canonical_invoice_retry_with_changed_receiver_propagates_idempotency_conflict(self, client_class):
+        sale = self.create_sale()
+        original_payload = {
+            "external_id": str(sale.uuid),
+            "sale_id": str(sale.uuid),
+            "receiver": {},
+        }
+        FiscalOutboxRequest.objects.create(
+            tenant_id=self.tenant_id,
+            sale=sale,
+            created_by=self.employee,
+            environment="development",
+            external_id=str(sale.uuid),
+            payload_snapshot=original_payload,
+            status=FiscalOutboxRequest.Status.SENT,
+            invoice_status="approved",
+            platform_invoice_id=34,
+        )
+        platform = client_class.return_value
+        platform.get_by_sale.return_value = {
+            "id": 34,
+            "status": "approved",
+            "sale_id": str(sale.uuid),
+            "external_id": str(sale.uuid),
+        }
+        platform.create_invoice.side_effect = PlatformBillingError(
+            "conflict",
+            status_code=409,
+            response_data={
+                "detail": {
+                    "code": "idempotency_conflict",
+                    "message": "La venta ya fue facturada con otros datos.",
+                }
+            },
+        )
+        self.authenticate(self.owner)
+
+        response = self.client.post(
+            "/api/v1/arca/invoices/",
+            {
+                "sale_id": str(sale.uuid),
+                "receiver": {"doc_type": 80, "doc_number": "20111111112", "iva_condition_id": 1},
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "idempotency_conflict")
+        platform.create_invoice.assert_called_once()
+        tracking = FiscalOutboxRequest.objects.get(sale=sale)
+        self.assertEqual(tracking.payload_snapshot, original_payload)
+
+    @patch("apps.arca.views.PlatformArcaClient")
+    def test_manual_invoice_cannot_access_sale_from_another_tenant(self, client_class):
+        other_tenant = Tenant.objects.create(uuid=self.other_tenant_id, name="Other")
+        other_user = User.objects.create_user(
+            tenant_id=other_tenant.uuid,
+            username="other-owner",
+            email="other-owner@example.com",
+            password="secret1234",
+            role=User.Role.OWNER,
+        )
+        other_cashbox = Cashbox.objects.create(
+            tenant_id=other_tenant.uuid,
+            opened_by=other_user,
+            initial_amount=Decimal("0.00"),
+        )
+        other_product = Product.objects.create(
+            tenant_id=other_tenant.uuid,
+            name="Private product",
+            price=Decimal("10.00"),
+            cost=Decimal("5.00"),
+            stock=Decimal("1.000"),
+        )
+        other_sale = Sale.objects.create(
+            tenant_id=other_tenant.uuid,
+            user=other_user,
+            cashbox=other_cashbox,
+            total=Decimal("10.00"),
+            payment_method=Sale.PaymentMethod.CASH,
+        )
+        SaleDetail.objects.create(
+            sale=other_sale,
+            product=other_product,
+            quantity=Decimal("1.000"),
+            price=Decimal("10.00"),
+            subtotal=Decimal("10.00"),
+        )
+        self.authenticate(self.owner)
+
+        response = self.client.post(
+            "/api/v1/arca/invoices/",
+            {"sale_id": str(other_sale.uuid)},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 404)
+        platform = client_class.return_value
+        platform.get_by_sale.assert_not_called()
+        platform.create_invoice.assert_not_called()
 
     @patch("apps.arca.views.PlatformArcaClient")
     def test_employee_cannot_follow_another_actors_invoice(self, client_class):

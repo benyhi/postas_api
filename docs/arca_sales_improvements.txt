@@ -1,0 +1,424 @@
+Feature:
+Mejoras de ventas y facturacion ARCA
+
+Classification:
+large
+
+Context reviewed:
+- apps/sales models, serializers, views and tests
+- apps/arca models, serializers, client, outbox, views and tests
+- postas_platform_api app/arca models, schemas, service, router and tests
+
+Current behavior:
+Las ventas no exponian su terminal, la configuracion no podia descubrir puntos de venta sin persistir un perfil, no existia listado publico de facturas y la facturacion manual aceptaba datos fiscales de venta enviados por el cliente sin reconstruir el seguimiento local.
+
+Proposed behavior:
+Exponer la terminal de caja, descubrir puntos ARCA con credenciales transitorias, listar facturas por tenant y hacer que toda factura manual derive su contenido y su identidad desde una venta autorizada.
+
+Implementation plan:
+1. Extender Platform con descubrimiento transitorio, listado tenant-scoped y validaciones por sale_id.
+2. Extender Postas con los contratos publicos, permisos, derivacion desde Sale y sincronizacion idempotente de FiscalOutboxRequest.
+3. Cubrir ventas, permisos, secretos, paginacion, tenant isolation e idempotencia.
+4. Regenerar OpenAPI, ejecutar checks y completar delivery review.
+
+Files changed:
+- apps/sales/serializers.py
+- apps/sales/tests.py
+- apps/arca/client.py
+- apps/arca/serializers.py
+- apps/arca/urls.py
+- apps/arca/views.py
+- apps/arca/tests.py
+- README.md
+- schema.yml
+- postas_platform_api/app/arca/schemas.py
+- postas_platform_api/app/arca/service.py
+- postas_platform_api/app/arca/router_internal.py
+- postas_platform_api/tests/test_arca.py
+- postas_platform_api/README.md
+
+Tests created or updated:
+- apps/sales/tests.py
+- apps/arca/tests.py
+- postas_platform_api/tests/test_arca.py
+
+Documentation updated:
+- README.md
+- postas_platform_api/README.md
+- docs/arca_sales_improvements.txt
+
+Checks run:
+- manage.py test apps.arca.tests apps.sales.tests: passed (32 tests)
+- pytest tests/test_arca.py: passed (34 tests)
+- manage.py check: passed
+- manage.py makemigrations --check --dry-run: passed (no changes)
+- manage.py spectacular --file schema.yml: passed with pre-existing serializer warnings
+- Platform OpenAPI route assertions: passed
+- ruff: not available
+- mypy: not available
+
+Risks:
+- Credenciales fiscales y llamadas externas sensibles.
+- Permisos por rol y aislamiento estricto por tenant.
+- Idempotencia entre Platform y el seguimiento local.
+
+Important notes:
+- No se requiere migracion: las constraints canonicas de Platform y el OneToOne local ya existian.
+- Las facturas historicas sin sale_id no se modifican ni se completan automaticamente.
+- El orden de despliegue requerido es postas_platform_api, postas_api y luego frontend.
+
+===============================================================================
+DOCUMENTACION FUNCIONAL Y DE INTEGRACION
+===============================================================================
+
+1. Alcance
+---------
+
+Esta entrega coordina postas_api y postas_platform_api para:
+
+- informar la terminal fisica asociada a cada venta;
+- descubrir puntos de venta ARCA antes de guardar la configuracion fiscal;
+- consultar todas las facturas del tenant con paginacion;
+- emitir facturas manuales exclusivamente a partir de ventas existentes;
+- mantener idempotencia entre la factura canonica de Platform y el seguimiento
+  local FiscalOutboxRequest.
+
+Platform es la fuente de verdad de perfiles y facturas ARCA. La base de
+postas_api conserva la venta y un seguimiento local, pero no reemplaza ni
+reconstruye el listado fiscal desde la outbox.
+
+
+2. Terminal incluida en ventas
+------------------------------
+
+SaleReadSerializer agrega:
+
+  "register": {
+    "uuid": "<uuid-terminal>",
+    "name": "Caja principal"
+  }
+
+El campo aparece en listado, detalle y respuesta de creacion de ventas.
+Si la sesion de caja es historica y no tiene terminal asociada, devuelve:
+
+  "register": null
+
+La terminal se obtiene desde Sale.cashbox.register. No representa el punto de
+venta fiscal ARCA. Los listados y detalles precargan cashbox__register para
+evitar una consulta adicional por cada venta.
+
+
+3. Descubrimiento de puntos de venta ARCA
+-----------------------------------------
+
+Endpoint publico:
+
+  POST /api/v1/arca/configuration/sales-points/
+
+Permiso:
+
+- OWNER: permitido.
+- ADMIN y EMPLOYEE: HTTP 403.
+
+Request:
+
+  {
+    "arca_environment": "development",
+    "arca_cuit": "20111111112",
+    "certificate": "-----BEGIN CERTIFICATE-----...",
+    "private_key": "-----BEGIN PRIVATE KEY-----...",
+    "access_token": "..."
+  }
+
+Respuesta HTTP 200:
+
+  {
+    "results": [
+      {
+        "number": 1,
+        "emission_type": "CAE",
+        "blocked": false,
+        "deactivation_date": null
+      }
+    ]
+  }
+
+Flujo:
+
+1. postas_api toma el tenant exclusivamente del JWT.
+2. Platform valida que el tenant tenga entitlement arca_invoicing.
+3. Platform valida CUIT, certificado y clave privada.
+4. Las credenciales se mantienen solamente en memoria durante la llamada.
+5. Platform ejecuta ElectronicBilling.getSalesPoints().
+6. Se eliminan puntos bloqueados, dados de baja o con numero invalido.
+7. La respuesta se ordena por numero ascendente.
+
+Este endpoint no crea ni actualiza un perfil fiscal. Tampoco registra,
+persiste ni devuelve certificate, private_key o access_token. El frontend debe
+usar el numero seleccionado en el PUT de configuracion existente:
+
+  PUT /api/v1/arca/configuration/
+
+Errores relevantes:
+
+- feature_not_enabled: HTTP 403; el plan no habilita ARCA.
+- invalid_credentials: HTTP 422; material criptografico invalido.
+- arca_auth_error: HTTP 422; credenciales rechazadas por ARCA.
+- arca_production_disabled: HTTP 503; llamadas productivas deshabilitadas.
+- arca_timeout: HTTP 504.
+- arca_unavailable: HTTP 503.
+
+
+4. Listado paginado de facturas
+-------------------------------
+
+Endpoint publico:
+
+  GET /api/v1/arca/invoices/?page=1&page_size=20
+
+Permisos:
+
+- OWNER y ADMIN: permitido.
+- EMPLOYEE: HTTP 403.
+
+Parametros:
+
+- page: entero mayor o igual a 1; default 1.
+- page_size: entero entre 1 y 100; default 20.
+
+Respuesta:
+
+  {
+    "count": 42,
+    "next": "http://localhost:8000/api/v1/arca/invoices/?page=2&page_size=20",
+    "previous": null,
+    "results": [
+      {
+        "id": 123,
+        "tenant_id": "<uuid-tenant>",
+        "environment": "development",
+        "fiscal_profile_id": 10,
+        "sale_id": "<uuid-venta-o-null>",
+        "external_id": "<identificador-idempotente>",
+        "actor_id": "<uuid-usuario-o-null>",
+        "actor_role": "ADMIN",
+        "status": "approved",
+        "point_of_sale": 1,
+        "voucher_type": 6,
+        "voucher_number": 15,
+        "net_amount": "100.00",
+        "iva_amount": "21.00",
+        "total_amount": "121.00",
+        "cae": "...",
+        "cae_expiration_date": "2026-09-12",
+        "observations": [],
+        "attempt_count": 1,
+        "next_retry_at": null,
+        "error": null,
+        "created_at": "2026-09-02T10:00:00Z",
+        "updated_at": "2026-09-02T10:00:05Z"
+      }
+    ]
+  }
+
+La consulta se ejecuta en Platform directamente sobre arca_invoices, filtrada
+por tenant_id y ordenada por created_at DESC, id DESC. FiscalOutboxRequest no
+se usa para construir este listado. Esta version no agrega filtros fiscales.
+
+
+5. Facturacion manual basada en ventas
+--------------------------------------
+
+Endpoints:
+
+  POST /api/v1/arca/invoices/
+  POST /api/v1/arca/invoices/explicit/
+
+Request normal:
+
+  {
+    "sale_id": "<uuid-venta>",
+    "receiver": {
+      "doc_type": 80,
+      "doc_number": "20111111112",
+      "iva_condition_id": 1
+    }
+  }
+
+Request explicito:
+
+  {
+    "sale_id": "<uuid-venta>",
+    "voucher_number": 15,
+    "receiver": {
+      "doc_type": 80,
+      "doc_number": "20111111112",
+      "iva_condition_id": 1
+    }
+  }
+
+sale_id es obligatorio. receiver es opcional y, si se omite, usa consumidor
+final. La ruta explicita requiere voucher_number.
+
+El cliente ya no controla external_id, invoice_date ni items. postas_api los
+deriva de la venta bloqueada dentro de una transaccion:
+
+- external_id = str(sale.uuid);
+- sale_id = sale.uuid;
+- invoice_date = sale.created_at.date();
+- description = nombre actual de SaleDetail.product;
+- quantity = SaleDetail.quantity;
+- final_unit_price = SaleDetail.price.
+
+SaleDetail conserva precio y cantidad de la venta. El nombre no posee snapshot
+y por eso se usa el nombre actual del producto.
+
+Validaciones y permisos:
+
+- La venta debe pertenecer al tenant obtenido del JWT.
+- La venta debe estar en estado COMPLETED.
+- EMPLOYEE solo puede facturar una venta creada por ese mismo usuario.
+- ADMIN y OWNER pueden facturar cualquier venta de su tenant.
+- Platform exige perfil fiscal validado y concepto Productos.
+- Una venta no puede generar dos facturas distintas.
+- Una outbox automatica en SENDING no puede ser reemplazada manualmente.
+- Una outbox PENDING o RETRYING tampoco puede reemplazarse mientras Platform
+  aun no tenga la factura canonica de esa venta.
+
+Errores publicos propios de Postas:
+
+- sale_not_found: HTTP 404; venta inexistente o perteneciente a otro tenant.
+- sale_not_completed: HTTP 409; venta cancelada o no completada.
+- sale_forbidden: HTTP 403; EMPLOYEE intenta facturar una venta ajena.
+- automatic_invoice_pending: HTTP 409; la outbox automatica aun debe resolverse.
+
+Los errores de Platform conservan el esquema:
+
+  {
+    "code": "idempotency_conflict",
+    "message": "..."
+  }
+
+
+6. Idempotencia y seguimiento local
+-----------------------------------
+
+Platform mantiene las restricciones canonicas:
+
+- UNIQUE (tenant_id, sale_id)
+- UNIQUE (tenant_id, external_id)
+
+Antes de emitir, postas_api consulta la factura por sale_id.
+
+- Si no existe, envia el payload derivado.
+- Si existe y coincide con el snapshot local, devuelve la factura existente.
+- Si cambia receiver o voucher_number, reenvia a Platform para que valide el
+  request hash y devuelva idempotency_conflict cuando corresponda.
+- Si falta el seguimiento local despues de una aceptacion remota, el reintento
+  reutiliza la idempotencia de Platform y reconstruye FiscalOutboxRequest.
+
+Tras una respuesta exitosa se crea o actualiza FiscalOutboxRequest con:
+
+- platform_invoice_id;
+- invoice_status;
+- external_id canonico devuelto por Platform;
+- payload_snapshot;
+- usuario que realizo la operacion;
+- estado local SENT.
+
+Esto permite que SaleReadSerializer muestre invoice_status e
+invoice_tracking_id en lugar de not_requested para facturas manuales.
+
+La venta y su outbox se bloquean durante la operacion manual. Si la outbox esta
+en SENDING se devuelve automatic_invoice_pending para impedir que un worker
+con una instancia antigua sobrescriba la finalizacion explicita.
+
+
+7. Identificacion explicita del receptor y compatibilidad historica
+------------------------------------------------------------------
+
+Una factura con status receiver_identification_required puede completarse por:
+
+  POST /api/v1/arca/invoices/explicit/
+
+Platform conserva la misma fila, sale_id y external_id. Solo reemplaza:
+
+- receiver;
+- voucher_number;
+- estado y datos de reintento asociados a la nueva emision.
+
+Para facturas anteriores que ya tienen sale_id pero usaron un external_id no
+canonico, postas_api reutiliza el external_id existente. Platform conserva
+invoice_date, fechas de servicio e items guardados originalmente y aplica solo
+los datos editables del receptor y el numero explicito.
+
+Las facturas historicas sin sale_id permanecen sin vinculacion automatica y no
+se realiza backfill.
+
+
+8. Contratos internos de Platform
+---------------------------------
+
+Todos requieren el contexto interno habitual de postas_api.
+
+Descubrimiento:
+
+  POST /internal/v1/arca/tenants/{tenant_id}/sales-points
+
+Listado:
+
+  GET /internal/v1/arca/tenants/{tenant_id}/invoices?offset=0&limit=20
+
+El limite interno acepta valores entre 1 y 100. La respuesta interna del
+listado contiene count y results; postas_api construye next y previous con el
+contrato paginado publico de DRF.
+
+
+9. Seguridad y operacion
+------------------------
+
+- tenant_id nunca se toma del body o query del cliente publico.
+- actor_id y actor_role se derivan del usuario autenticado.
+- Las consultas de venta y factura se filtran por tenant.
+- Los secretos de descubrimiento no se guardan en TenantConfig,
+  FiscalOutboxRequest, logs de aplicacion ni respuestas.
+- Las llamadas productivas requieren ARCA_PRODUCTION_CALLS_ENABLED=true en
+  Platform.
+- Los workers ARCA requieren PostgreSQL para los locks y garantias de
+  concurrencia. SQLite solo permite pruebas funcionales, no prueba el
+  comportamiento real de select_for_update.
+
+
+10. Despliegue y verificacion
+----------------------------
+
+Orden obligatorio:
+
+1. Desplegar postas_platform_api.
+2. Desplegar postas_api.
+3. Actualizar el frontend.
+
+El frontend debe:
+
+1. Enviar credenciales al endpoint de descubrimiento.
+2. Mostrar solamente results habilitados.
+3. Permitir seleccionar number.
+4. Enviar la configuracion completa al PUT /arca/configuration/.
+5. Para facturacion manual, enviar sale_id, receiver y, en la ruta explicita,
+   voucher_number. No debe enviar items, external_id ni invoice_date.
+
+Comandos de verificacion Postas:
+
+  $env:DATABASE_URL='sqlite:///D:/benja/proyectos/postas_api/db.sqlite3'
+  & D:\benja\proyectos\postas_api\env\Scripts\python.exe D:\benja\proyectos\postas_api\manage.py check
+  & D:\benja\proyectos\postas_api\env\Scripts\python.exe D:\benja\proyectos\postas_api\manage.py test apps.arca.tests apps.sales.tests
+  & D:\benja\proyectos\postas_api\env\Scripts\python.exe D:\benja\proyectos\postas_api\manage.py makemigrations --check --dry-run
+
+Comando de verificacion Platform:
+
+  $env:PYTHONPATH='D:\benja\proyectos\postas_platform_api'
+  $env:DATABASE_URL='sqlite:///:memory:'
+  & D:\benja\proyectos\postas_platform_api\env\Scripts\python.exe -m pytest D:\benja\proyectos\postas_platform_api\tests\test_arca.py -q -p no:cacheprovider
+
+Para validar carreras y locks antes de produccion se debe repetir la cobertura
+de concurrencia contra PostgreSQL.

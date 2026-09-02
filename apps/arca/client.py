@@ -30,6 +30,13 @@ class PlatformArcaClient(PlatformBillingClient):
             {},
         )
 
+    def discover_sales_points(self, tenant_id, payload):
+        return self._request(
+            "POST",
+            f"/internal/v1/arca/tenants/{parse.quote(str(tenant_id), safe='')}/sales-points",
+            payload,
+        )
+
     def create_invoice(self, tenant_id, environment, payload, *, explicit=False, automatic=False):
         suffix = "/explicit" if explicit else "/automatic" if automatic else ""
         return self._request(
@@ -48,6 +55,13 @@ class PlatformArcaClient(PlatformBillingClient):
         return self._request(
             "GET",
             f"/internal/v1/arca/tenants/{parse.quote(str(tenant_id), safe='')}/invoices/by-sale/{parse.quote(str(sale_id), safe='')}",
+        )
+
+    def list_invoices(self, tenant_id, *, offset, limit):
+        query = parse.urlencode({"offset": offset, "limit": limit})
+        return self._request(
+            "GET",
+            f"/internal/v1/arca/tenants/{parse.quote(str(tenant_id), safe='')}/invoices?{query}",
         )
 
     def get_fiscal(self, tenant_id, *, environment, point_of_sale, voucher_type, voucher_number):

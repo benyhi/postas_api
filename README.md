@@ -127,8 +127,10 @@ La API publica vive bajo `/api/v1/arca/`. Las credenciales se envian a Platform
 y nunca se persisten ni se devuelven desde `postas_api`.
 
 - `GET|PUT|DELETE /api/v1/arca/configuration/`: solo OWNER.
-- `POST /api/v1/arca/invoices/`: cualquier usuario autenticado.
-- `POST /api/v1/arca/invoices/explicit/`: cualquier usuario autenticado.
+- `POST /api/v1/arca/configuration/sales-points/`: solo OWNER; descubre puntos habilitados sin persistir las credenciales enviadas.
+- `GET /api/v1/arca/invoices/?page=1&page_size=20`: listado del tenant para ADMIN y OWNER (`page_size` maximo 100).
+- `POST /api/v1/arca/invoices/`: cualquier usuario autenticado; requiere `sale_id` y acepta solamente datos editables de `receiver`.
+- `POST /api/v1/arca/invoices/explicit/`: mismo contrato basado en venta, agregando `voucher_number`.
 - `GET /api/v1/arca/invoices/by-external-id/{external_id}/`: emisor, ADMIN u OWNER.
 - `GET /api/v1/arca/invoices/fiscal/`: ADMIN u OWNER.
 - `GET /api/v1/arca/invoices/last-voucher/`: ADMIN u OWNER.
@@ -147,6 +149,12 @@ El ambiente queda fijado en el snapshot de la outbox. Cambiar la configuracion
 del tenant no mueve solicitudes existentes entre homologacion y produccion.
 La automatizacion requiere un perfil validado con concepto Productos. Docker
 Compose inicia tanto `arca_outbox_worker` como `postas_platform_arca_worker`.
+
+Las emisiones manuales derivan `external_id`, fecha e items desde la venta del
+tenant. Solo se aceptan ventas `COMPLETED`; EMPLOYEE puede facturar ventas
+propias y ADMIN/OWNER cualquier venta del tenant. La respuesta exitosa crea o
+reconstruye el seguimiento local sin volver a emitir una factura ya aceptada
+por Platform.
 
 Mapa de guards actuales:
 

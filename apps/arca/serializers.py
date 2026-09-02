@@ -1,12 +1,4 @@
-from decimal import Decimal
-
 from rest_framework import serializers
-
-
-class ArcaItemSerializer(serializers.Serializer):
-    description = serializers.CharField(max_length=255)
-    quantity = serializers.DecimalField(max_digits=12, decimal_places=4, min_value=Decimal("0.0001"))
-    final_unit_price = serializers.DecimalField(max_digits=15, decimal_places=2, min_value=Decimal("0.00"))
 
 
 class ArcaReceiverSerializer(serializers.Serializer):
@@ -16,20 +8,8 @@ class ArcaReceiverSerializer(serializers.Serializer):
 
 
 class ArcaInvoiceCreateSerializer(serializers.Serializer):
-    external_id = serializers.CharField(max_length=160)
-    sale_id = serializers.UUIDField(required=False, allow_null=True)
+    sale_id = serializers.UUIDField()
     receiver = ArcaReceiverSerializer(required=False, default=dict)
-    invoice_date = serializers.DateField(required=False)
-    service_start_date = serializers.DateField(required=False, allow_null=True)
-    service_end_date = serializers.DateField(required=False, allow_null=True)
-    payment_due_date = serializers.DateField(required=False, allow_null=True)
-    items = ArcaItemSerializer(many=True, min_length=1)
-
-    def validate(self, attrs):
-        supplied = [attrs.get("service_start_date"), attrs.get("service_end_date"), attrs.get("payment_due_date")]
-        if any(supplied) and not all(supplied):
-            raise serializers.ValidationError("Las fechas de servicio y vencimiento deben informarse juntas.")
-        return attrs
 
 
 class ArcaExplicitInvoiceCreateSerializer(ArcaInvoiceCreateSerializer):
@@ -66,6 +46,30 @@ class ArcaConfigurationWriteSerializer(serializers.Serializer):
                     {field: "Este campo es obligatorio al configurar credenciales." for field in missing}
                 )
         return attrs
+
+
+class ArcaSalesPointDiscoverySerializer(serializers.Serializer):
+    arca_environment = serializers.ChoiceField(choices=["development", "production"])
+    arca_cuit = serializers.RegexField(r"^\d{11}$")
+    certificate = serializers.CharField(write_only=True, trim_whitespace=False)
+    private_key = serializers.CharField(write_only=True, trim_whitespace=False)
+    access_token = serializers.CharField(write_only=True, trim_whitespace=False)
+
+
+class ArcaSalesPointSerializer(serializers.Serializer):
+    number = serializers.IntegerField()
+    emission_type = serializers.CharField()
+    blocked = serializers.BooleanField()
+    deactivation_date = serializers.DateField(allow_null=True)
+
+
+class ArcaSalesPointListSerializer(serializers.Serializer):
+    results = ArcaSalesPointSerializer(many=True)
+
+
+class ArcaInvoiceListQuerySerializer(serializers.Serializer):
+    page = serializers.IntegerField(min_value=1, default=1)
+    page_size = serializers.IntegerField(min_value=1, max_value=100, default=20)
 
 
 class FiscalReferenceSerializer(serializers.Serializer):
@@ -105,6 +109,13 @@ class ArcaInvoiceResponseSerializer(serializers.Serializer):
     error = ArcaInvoiceErrorSerializer(allow_null=True)
     created_at = serializers.DateTimeField()
     updated_at = serializers.DateTimeField()
+
+
+class ArcaInvoicePageSerializer(serializers.Serializer):
+    count = serializers.IntegerField()
+    next = serializers.URLField(allow_null=True)
+    previous = serializers.URLField(allow_null=True)
+    results = ArcaInvoiceResponseSerializer(many=True)
 
 
 class ArcaConfigurationResponseSerializer(serializers.Serializer):

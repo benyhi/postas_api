@@ -8,11 +8,16 @@ from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema
 
 from apps.arca.client import PlatformArcaClient
+from apps.arca.models import FiscalOutboxRequest
 from apps.arca.serializers import (
     ArcaConfigurationWriteSerializer,
     ArcaExplicitInvoiceCreateSerializer,
     ArcaInvoiceCreateSerializer,
+    ArcaInvoiceListQuerySerializer,
+    ArcaInvoicePageSerializer,
     ArcaInvoiceResponseSerializer,
+    ArcaSalesPointDiscoverySerializer,
+    ArcaSalesPointListSerializer,
     ArcaConfigurationResponseSerializer,
     ArcaLastVoucherResponseSerializer,
     FiscalReferenceSerializer,
@@ -35,6 +40,58 @@ def _config_for(tenant_id):
     tenant, _ = Tenant.objects.get_or_create(uuid=tenant_id)
     config, _ = TenantConfig.objects.get_or_create(tenant=tenant)
     return config
+
+
+def _page_link(request, page):
+    if page is None:
+        return None
+    query = request.query_params.copy()
+    query["page"] = page
+    return request.build_absolute_uri(f"{request.path}?{query.urlencode()}")
+
+
+def _invoice_payload(sale, user, receiver, *, voucher_number=None):
+    payload = {
+        "external_id": str(sale.uuid),
+        "sale_id": str(sale.uuid),
+        "actor_id": str(user.uuid),
+        "actor_role": user.role,
+        "receiver": receiver,
+        "invoice_date": sale.created_at.date().isoformat(),
+        "items": [
+            {
+                "description": detail.product.name,
+                "quantity": str(detail.quantity),
+                "final_unit_price": str(detail.price),
+            }
+            for detail in sale.details.all()
+        ],
+    }
+    if voucher_number is not None:
+        payload["voucher_number"] = voucher_number
+    return payload
+
+
+def _sync_fiscal_tracking(*, sale, user, environment, payload, result, replace_payload):
+    existing = FiscalOutboxRequest.objects.filter(sale=sale).first()
+    external_id = str(result.get("external_id") or payload.get("external_id") or sale.uuid)
+    FiscalOutboxRequest.objects.update_or_create(
+        sale=sale,
+        defaults={
+            "tenant_id": sale.tenant_id,
+            "created_by": user,
+            "environment": environment,
+            "external_id": external_id,
+            "payload_snapshot": payload if replace_payload or existing is None else existing.payload_snapshot,
+            "status": FiscalOutboxRequest.Status.SENT,
+            "invoice_status": str(result.get("status") or "pending"),
+            "platform_invoice_id": result.get("id"),
+            "next_attempt_at": None,
+            "locked_at": None,
+            "last_error_code": "",
+            "last_error_message": "",
+        },
+    )
 
 
 class ArcaConfigurationView(APIView):
@@ -152,35 +209,174 @@ class ArcaConfigurationView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class ArcaSalesPointDiscoveryView(APIView):
+    permission_classes = [IsOwner]
+
+    @extend_schema(
+        request=ArcaSalesPointDiscoverySerializer,
+        responses={200: ArcaSalesPointListSerializer},
+    )
+    def post(self, request):
+        serializer = ArcaSalesPointDiscoverySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            result = PlatformArcaClient().discover_sales_points(
+                request.tenant_id,
+                dict(serializer.validated_data),
+            )
+        except PlatformBillingError as exc:
+            return _platform_error(exc)
+        return Response(result)
+
+
 class ArcaInvoiceCreateView(APIView):
     permission_classes = [IsAuthenticated]
     serializer_class = ArcaInvoiceCreateSerializer
     explicit = False
 
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [IsAdminOrOwner()]
+        return super().get_permissions()
+
+    @extend_schema(
+        parameters=[ArcaInvoiceListQuerySerializer],
+        responses={200: ArcaInvoicePageSerializer},
+    )
+    def get(self, request):
+        serializer = ArcaInvoiceListQuerySerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        page = serializer.validated_data["page"]
+        page_size = serializer.validated_data["page_size"]
+        try:
+            result = PlatformArcaClient().list_invoices(
+                request.tenant_id,
+                offset=(page - 1) * page_size,
+                limit=page_size,
+            )
+        except PlatformBillingError as exc:
+            return _platform_error(exc)
+        count = int(result.get("count") or 0)
+        return Response(
+            {
+                "count": count,
+                "next": _page_link(request, page + 1) if page * page_size < count else None,
+                "previous": _page_link(request, page - 1) if page > 1 else None,
+                "results": result.get("results") or [],
+            }
+        )
+
     @extend_schema(responses={202: ArcaInvoiceResponseSerializer})
     def post(self, request):
         serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
-        payload = dict(serializer.validated_data)
-        sale_id = payload.get("sale_id")
-        if sale_id and not Sale.objects.filter(uuid=sale_id, tenant_id=request.tenant_id).exists():
-            return Response({"code": "sale_not_found", "message": "La venta no pertenece al tenant."}, status=404)
-        payload["actor_id"] = str(request.user.uuid)
-        payload["actor_role"] = request.user.role
-        config = _config_for(request.tenant_id)
         try:
-            result = PlatformArcaClient().create_invoice(
-                request.tenant_id,
-                config.arca_environment,
-                payload,
-                explicit=self.explicit,
-            )
+            with transaction.atomic():
+                sale = (
+                    Sale.objects.select_for_update()
+                    .filter(
+                        uuid=serializer.validated_data["sale_id"],
+                        tenant_id=request.tenant_id,
+                    )
+                    .select_related("user")
+                    .prefetch_related("details__product")
+                    .first()
+                )
+                if sale is None:
+                    return Response(
+                        {"code": "sale_not_found", "message": "La venta no pertenece al tenant."},
+                        status=status.HTTP_404_NOT_FOUND,
+                    )
+                if sale.status != Sale.Status.COMPLETED:
+                    return Response(
+                        {"code": "sale_not_completed", "message": "Solo se pueden facturar ventas completadas."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                if request.user.role == "EMPLOYEE" and sale.user_id != request.user.uuid:
+                    return Response(
+                        {"code": "sale_forbidden", "message": "El empleado solo puede facturar ventas propias."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+
+                payload = _invoice_payload(
+                    sale,
+                    request.user,
+                    serializer.validated_data["receiver"],
+                    voucher_number=serializer.validated_data.get("voucher_number"),
+                )
+                config = _config_for(request.tenant_id)
+                client = PlatformArcaClient()
+                try:
+                    existing = client.get_by_sale(request.tenant_id, sale.uuid)
+                except PlatformBillingError as exc:
+                    if exc.status_code != 404:
+                        raise
+                    existing = None
+
+                tracking = FiscalOutboxRequest.objects.select_for_update().filter(sale=sale).first()
+                queued_statuses = {
+                    FiscalOutboxRequest.Status.PENDING,
+                    FiscalOutboxRequest.Status.RETRYING,
+                }
+                if tracking is not None and (
+                    tracking.status == FiscalOutboxRequest.Status.SENDING
+                    or (existing is None and tracking.status in queued_statuses)
+                ):
+                    return Response(
+                        {
+                            "code": "automatic_invoice_pending",
+                            "message": "La solicitud automatica pendiente no puede reemplazarse manualmente.",
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
+                if existing is not None and existing.get("external_id"):
+                    payload["external_id"] = str(existing["external_id"])
+
+                canonical_existing = (
+                    existing is not None and str(existing.get("external_id") or "") == str(sale.uuid)
+                )
+                if canonical_existing and existing.get("actor_id"):
+                    payload["actor_id"] = str(existing["actor_id"])
+                    payload["actor_role"] = existing.get("actor_role")
+                tracked_payload = tracking.payload_snapshot if tracking is not None else None
+                same_editable_data = tracked_payload is not None and (
+                    tracked_payload.get("receiver") == payload.get("receiver")
+                    and tracked_payload.get("voucher_number") == payload.get("voucher_number")
+                )
+                resume_receiver = (
+                    self.explicit
+                    and existing is not None
+                    and existing.get("status") == "receiver_identification_required"
+                )
+                validate_canonical_retry = canonical_existing and not same_editable_data
+
+                if existing is not None and not (resume_receiver or validate_canonical_retry):
+                    result = existing
+                    submitted_to_platform = False
+                else:
+                    result = client.create_invoice(
+                        request.tenant_id,
+                        config.arca_environment,
+                        payload,
+                        explicit=self.explicit,
+                    )
+                    submitted_to_platform = True
+                _sync_fiscal_tracking(
+                    sale=sale,
+                    user=request.user,
+                    environment=config.arca_environment,
+                    payload=payload,
+                    result=result,
+                    replace_payload=submitted_to_platform,
+                )
         except PlatformBillingError as exc:
             return _platform_error(exc)
         return Response(result, status=status.HTTP_202_ACCEPTED)
 
 
 class ArcaExplicitInvoiceCreateView(ArcaInvoiceCreateView):
+    http_method_names = ["post", "options"]
     serializer_class = ArcaExplicitInvoiceCreateSerializer
     explicit = True
 
