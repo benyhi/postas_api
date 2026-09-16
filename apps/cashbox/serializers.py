@@ -6,8 +6,15 @@ from apps.cashbox.models import Cashbox, CashRegister
 class CashRegisterSerializer(serializers.ModelSerializer):
     class Meta:
         model = CashRegister
-        fields = ["uuid", "name", "active", "created_at", "updated_at"]
-        read_only_fields = ["uuid", "created_at", "updated_at"]
+        fields = [
+            "uuid", "name", "active", "mercado_pago_terminal_id",
+            "mercado_pago_pos_id", "mercado_pago_external_pos_id",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = [
+            "uuid", "mercado_pago_terminal_id", "mercado_pago_pos_id",
+            "mercado_pago_external_pos_id", "created_at", "updated_at",
+        ]
 
     def validate_name(self, value):
         request = self.context["request"]

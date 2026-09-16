@@ -74,6 +74,10 @@ urlpatterns = [
     # ARCA invoicing
     path('api/v1/arca/', include('apps.arca.urls')),
 
+    # Mercado Pago Point / dynamic QR
+    path('api/v1/mercado-pago/', include('apps.mercado_pago.urls')),
+    path('api/v1/webhooks/mercado-pago/', include('apps.mercado_pago.webhook_urls')),
+
     # Cloud / Storage
     path('api/v1/cloud/', include(cloud_urlpatterns)),
 

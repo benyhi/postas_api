@@ -11,9 +11,12 @@ class Sale(TenantModel):
         CASH = "CASH", "Cash"
         CARD = "CARD", "Card"
         TRANSFER = "TRANSFER", "Transfer"
+        POINT = "POINT", "Mercado Pago Point"
+        QR = "QR", "Mercado Pago QR"
         MIXED = "MIXED", "Mixed"
 
     class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
         COMPLETED = "COMPLETED", "Completed"
         CANCELLED = "CANCELLED", "Cancelled"
 

@@ -4,10 +4,12 @@ from apps.sales.views import (
     SaleListCreateView,
     SaleDetailView,
     SaleCancelView,
+    SalePaymentRefreshView,
 )
 
 urlpatterns = [
     path("", SaleListCreateView.as_view(), name="sale-list-create"),
     path("<uuid:uuid>/", SaleDetailView.as_view(), name="sale-detail"),
     path("<uuid:uuid>/cancel/", SaleCancelView.as_view(), name="sale-cancel"),
+    path("<uuid:uuid>/refresh-payment/", SalePaymentRefreshView.as_view(), name="sale-payment-refresh"),
 ]

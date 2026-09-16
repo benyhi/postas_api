@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
 from django.db import transaction
 
 from apps.sales.models import Sale, SaleDetail
@@ -9,6 +10,8 @@ from apps.cashbox.models import Cashbox
 from apps.tenants.models import Tenant
 from apps.arca.outbox import create_sale_fiscal_request
 from apps.arca.models import FiscalOutboxRequest
+from apps.mercado_pago.models import MercadoPagoOrder
+from apps.mercado_pago.serializers import MercadoPagoSaleStatusSerializer
 
 
 class SaleDetailWriteSerializer(serializers.Serializer):
@@ -64,18 +67,36 @@ class SaleCreateSerializer(serializers.Serializer):
         if len(methods) != len(set(methods)):
             raise serializers.ValidationError("No se pueden repetir métodos de pago.")
 
+        external_payments = [
+            payment for payment in payments
+            if payment["method"] in (Sale.PaymentMethod.POINT, Sale.PaymentMethod.QR)
+        ]
+        if len(external_payments) > 1:
+            raise serializers.ValidationError("Only one POINT or QR payment line is allowed.")
+        if external_payments and any(
+            payment["method"] == Sale.PaymentMethod.MIXED for payment in payments
+        ):
+            raise serializers.ValidationError("MIXED is derived by the server and cannot be a payment line.")
+
         # Validate payments cover the total
         payments_total = sum(p["amount"] for p in payments)
         if payments_total < computed_total:
             raise serializers.ValidationError(
                 f"El monto pagado ({payments_total}) es insuficiente para cubrir el total ({computed_total})."
             )
+        if external_payments and payments_total != computed_total:
+            raise serializers.ValidationError(
+                f"External sales must match the total exactly ({computed_total})."
+            )
 
         attrs["computed_total"] = computed_total
+        attrs["external_payment"] = external_payments[0] if external_payments else None
         return attrs
 
     @transaction.atomic
     def create(self, validated_data):
+        if validated_data.get("external_payment"):
+            raise RuntimeError("External sales must be created through the Mercado Pago saga.")
         request = self.context["request"]
         items = validated_data["items"]
         cashbox_candidate = validated_data["cashbox"]
@@ -147,6 +168,7 @@ class SaleReadSerializer(serializers.ModelSerializer):
     register = SaleRegisterSerializer(source="cashbox.register", read_only=True, allow_null=True)
     invoice_status = serializers.SerializerMethodField()
     invoice_tracking_id = serializers.SerializerMethodField()
+    mercado_pago = serializers.SerializerMethodField()
 
     def get_invoice_status(self, obj) -> str:
         try:
@@ -160,10 +182,26 @@ class SaleReadSerializer(serializers.ModelSerializer):
         except (AttributeError, FiscalOutboxRequest.DoesNotExist):
             return None
 
+    @extend_schema_field(MercadoPagoSaleStatusSerializer(allow_null=True))
+    def get_mercado_pago(self, obj):
+        try:
+            order = obj.mercado_pago_order
+        except (AttributeError, MercadoPagoOrder.DoesNotExist):
+            return None
+        return {
+            "type": order.order_type,
+            "state": order.state,
+            "status": order.remote_status or None,
+            "status_detail": order.remote_status_detail or None,
+            "qr_data": order.qr_data or None,
+            "expires_at": order.expires_at,
+        }
+
     class Meta:
         model = Sale
         fields = [
             "uuid", "tenant_id", "user", "user_username",
             "cashbox", "total", "payment_method", "payments", "status",
             "register", "created_at", "details", "invoice_status", "invoice_tracking_id",
+            "mercado_pago",
         ]

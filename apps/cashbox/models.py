@@ -9,6 +9,9 @@ from core.models.tenant_model import TenantModel
 class CashRegister(TenantModel):
     uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100)
+    mercado_pago_terminal_id = models.CharField(max_length=120, null=True, blank=True)
+    mercado_pago_pos_id = models.CharField(max_length=120, null=True, blank=True)
+    mercado_pago_external_pos_id = models.CharField(max_length=120, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -19,6 +22,21 @@ class CashRegister(TenantModel):
             models.UniqueConstraint(
                 fields=["tenant_id", "name"],
                 name="cash_register_unique_tenant_name",
+            ),
+            models.UniqueConstraint(
+                fields=["tenant_id", "mercado_pago_terminal_id"],
+                condition=models.Q(mercado_pago_terminal_id__isnull=False),
+                name="cashreg_uq_tenant_mp_terminal",
+            ),
+            models.UniqueConstraint(
+                fields=["tenant_id", "mercado_pago_pos_id"],
+                condition=models.Q(mercado_pago_pos_id__isnull=False),
+                name="cashreg_uq_tenant_mp_pos",
+            ),
+            models.UniqueConstraint(
+                fields=["tenant_id", "mercado_pago_external_pos_id"],
+                condition=models.Q(mercado_pago_external_pos_id__isnull=False),
+                name="cashreg_uq_tenant_mp_ext_pos",
             ),
         ]
 

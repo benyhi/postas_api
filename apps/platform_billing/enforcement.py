@@ -32,6 +32,83 @@ class BillingEnforcementError(APIException):
         self.detail = payload
 
 
+def reserve_billing_usage(
+    tenant_id, feature_key: str, *, amount: int, external_id,
+    idempotency_key: str, metadata=None, client=None,
+):
+    billing_client = client or PlatformBillingClient()
+    try:
+        response = billing_client.reserve_usage(
+            tenant_id, feature_key, amount=amount, external_id=external_id,
+            idempotency_key=idempotency_key, metadata=metadata,
+        )
+    except PlatformBillingError as exc:
+        if exc.status_code == status.HTTP_409_CONFLICT and _is_duplicate_usage_response(exc.response_data):
+            return exc.response_data
+        raise _platform_unavailable(feature_key, exc, detail="No se pudo reservar el consumo del plan.") from exc
+    if response.get("allowed") is False or response.get("status") == "released":
+        return _assert_allowed_response(response, feature_key)
+    if (
+        response.get("status") in {"active", "committed"}
+        and (response.get("reservation_id") or response.get("id"))
+    ):
+        return response
+    raise BillingEnforcementError(
+        _stable_payload(feature_key=feature_key, code=PLATFORM_UNAVAILABLE_CODE,
+                        detail="La plataforma no confirmo la reserva del consumo."),
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
+
+def commit_billing_reservation(tenant_id, *, idempotency_key: str, client=None):
+    return _change_billing_reservation(
+        tenant_id, idempotency_key=idempotency_key, operation="commit", client=client,
+    )
+
+
+def release_billing_reservation(tenant_id, *, idempotency_key: str, client=None):
+    return _change_billing_reservation(
+        tenant_id, idempotency_key=idempotency_key, operation="release", client=client,
+    )
+
+
+def _change_billing_reservation(tenant_id, *, idempotency_key, operation, client=None):
+    billing_client = client or PlatformBillingClient()
+    try:
+        method = (billing_client.commit_usage_reservation if operation == "commit"
+                  else billing_client.release_usage_reservation)
+        response = method(tenant_id, idempotency_key=idempotency_key)
+    except PlatformBillingError as exc:
+        if (
+            operation == "release"
+            and exc.status_code == status.HTTP_409_CONFLICT
+            and _platform_error_code(exc.response_data) == "reservation_not_found"
+        ):
+            return {
+                "allowed": True,
+                "status": "released",
+                "released": True,
+                "already_applied": True,
+            }
+        if exc.status_code == status.HTTP_409_CONFLICT and _is_duplicate_usage_response(exc.response_data):
+            return exc.response_data
+        raise _platform_unavailable(
+            "pos_sales", exc, detail=f"No se pudo {operation} la reserva del plan.",
+        ) from exc
+    positive = (
+        response.get("committed") is True or response.get("released") is True
+        or response.get("already_committed") is True or response.get("already_released") is True
+        or response.get("status") in {"committed", "released"}
+    )
+    if not positive:
+        raise BillingEnforcementError(
+            _stable_payload(feature_key="pos_sales", code=PLATFORM_UNAVAILABLE_CODE,
+                            detail=f"La plataforma no confirmo {operation} de la reserva."),
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return response
+
+
 def check_billing_entitlement(
     tenant_id,
     feature_key: str,
@@ -194,6 +271,13 @@ def _response_code(response: dict[str, Any]) -> str:
         or response.get("error")
         or ""
     )
+
+
+def _platform_error_code(response: dict[str, Any]) -> str:
+    detail = response.get("detail")
+    if isinstance(detail, dict) and detail.get("code"):
+        return str(detail["code"]).lower()
+    return _response_code(response).lower()
 
 
 def _response_detail(response: dict[str, Any], code: str) -> str:

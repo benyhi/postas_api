@@ -1114,6 +1114,130 @@ paths:
               schema:
                 $ref: '#/components/schemas/DocumentExtractionResult'
           description: ''
+  /api/v1/mercado-pago/cash-registers/{uuid}/association/:
+    put:
+      operationId: v1_mercado_pago_cash_registers_association_update
+      summary: Asociar recursos Mercado Pago a una caja
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Mercado Pago
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CashRegisterAssociationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CashRegisterAssociationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CashRegisterAssociationRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashRegister'
+          description: ''
+    delete:
+      operationId: v1_mercado_pago_cash_registers_association_destroy
+      summary: Desasociar recursos Mercado Pago de una caja
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Mercado Pago
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/mercado-pago/connection/:
+    get:
+      operationId: v1_mercado_pago_connection_retrieve
+      summary: Consultar conexion Mercado Pago
+      tags:
+      - Mercado Pago
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionStatus'
+          description: ''
+    delete:
+      operationId: v1_mercado_pago_connection_destroy
+      summary: Desvincular Mercado Pago
+      tags:
+      - Mercado Pago
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionStatus'
+          description: ''
+  /api/v1/mercado-pago/oauth/start/:
+    post:
+      operationId: v1_mercado_pago_oauth_start_create
+      summary: Iniciar OAuth de Mercado Pago
+      tags:
+      - Mercado Pago
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthAuthorizationResponse'
+          description: ''
+  /api/v1/mercado-pago/pos/:
+    get:
+      operationId: v1_mercado_pago_pos_retrieve
+      summary: Descubrir POS para QR dinamico
+      tags:
+      - Mercado Pago
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceDiscovery'
+          description: ''
+  /api/v1/mercado-pago/terminals/:
+    get:
+      operationId: v1_mercado_pago_terminals_retrieve
+      summary: Descubrir terminales Point
+      tags:
+      - Mercado Pago
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceDiscovery'
+          description: ''
   /api/v1/product-suppliers/:
     get:
       operationId: v1_product_suppliers_list
@@ -1778,12 +1902,13 @@ paths:
         schema:
           type: string
           enum:
+          - CARD
           - CASH
-          - CREDIT
-          - DEBIT
+          - MIXED
+          - POINT
           - QR
           - TRANSFER
-        description: Filtrar por metodo de pago (CASH, DEBIT, CREDIT, TRANSFER, QR)
+        description: Filtrar por metodo de pago, incluyendo lineas de ventas mixtas
       - in: query
         name: register_id
         schema:
@@ -1865,6 +1990,28 @@ paths:
       description: Cancela una venta y revierte el stock de los productos. Solo ADMIN
         u OWNER.
       summary: Cancelar venta
+      parameters:
+      - in: path
+        name: uuid
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Sales
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaleRead'
+          description: ''
+  /api/v1/sales/{uuid}/refresh-payment/:
+    post:
+      operationId: v1_sales_refresh_payment_create
+      summary: Refrescar estado Mercado Pago
       parameters:
       - in: path
         name: uuid
@@ -2242,6 +2389,21 @@ paths:
       - jwtAuth: []
       responses:
         '204':
+          description: No response body
+  /api/v1/webhooks/mercado-pago/orders/:
+    post:
+      operationId: v1_webhooks_mercado_pago_orders_create
+      summary: Recibir notificaciones de orders
+      tags:
+      - Mercado Pago Webhooks
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookReceipt'
+          description: ''
+        '401':
           description: No response body
 components:
   schemas:
@@ -2634,6 +2796,18 @@ components:
           maxLength: 100
         active:
           type: boolean
+        mercado_pago_terminal_id:
+          type: string
+          readOnly: true
+          nullable: true
+        mercado_pago_pos_id:
+          type: string
+          readOnly: true
+          nullable: true
+        mercado_pago_external_pos_id:
+          type: string
+          readOnly: true
+          nullable: true
         created_at:
           type: string
           format: date-time
@@ -2644,9 +2818,27 @@ components:
           readOnly: true
       required:
       - created_at
+      - mercado_pago_external_pos_id
+      - mercado_pago_pos_id
+      - mercado_pago_terminal_id
       - name
       - updated_at
       - uuid
+    CashRegisterAssociationRequest:
+      type: object
+      properties:
+        terminal_id:
+          type: string
+          minLength: 1
+          maxLength: 120
+        pos_id:
+          type: string
+          minLength: 1
+          maxLength: 120
+        external_pos_id:
+          type: string
+          minLength: 1
+          maxLength: 120
     CashRegisterRequest:
       type: object
       properties:
@@ -2926,6 +3118,55 @@ components:
           default: true
       required:
       - name
+    ConnectionStatus:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          readOnly: true
+        connected:
+          type: boolean
+          readOnly: true
+        status:
+          type: string
+          readOnly: true
+        collector_id:
+          type: string
+          readOnly: true
+          nullable: true
+        scopes:
+          type: array
+          items:
+            type: string
+          readOnly: true
+        live_mode:
+          type: boolean
+          readOnly: true
+          nullable: true
+        application_id:
+          type: string
+          readOnly: true
+          nullable: true
+        integration_id:
+          type: string
+          readOnly: true
+          nullable: true
+        token_expires_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+      required:
+      - application_id
+      - collector_id
+      - connected
+      - integration_id
+      - live_mode
+      - scopes
+      - status
+      - tenant_id
+      - token_expires_at
     CustomTokenObtainPairRequest:
       type: object
       properties:
@@ -3032,18 +3273,70 @@ components:
       description: |-
         * `development` - development
         * `production` - production
+    MercadoPagoSaleStatus:
+      type: object
+      properties:
+        type:
+          allOf:
+          - $ref: '#/components/schemas/TypeEnum'
+          readOnly: true
+        state:
+          type: string
+          readOnly: true
+        status:
+          type: string
+          readOnly: true
+          nullable: true
+        status_detail:
+          type: string
+          readOnly: true
+          nullable: true
+        qr_data:
+          type: string
+          readOnly: true
+          nullable: true
+        expires_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+      required:
+      - expires_at
+      - qr_data
+      - state
+      - status
+      - status_detail
+      - type
     MethodEnum:
       enum:
       - CASH
       - CARD
       - TRANSFER
+      - POINT
+      - QR
       - MIXED
       type: string
       description: |-
         * `CASH` - Cash
         * `CARD` - Card
         * `TRANSFER` - Transfer
+        * `POINT` - Mercado Pago Point
+        * `QR` - Mercado Pago QR
         * `MIXED` - Mixed
+    OAuthAuthorizationResponse:
+      type: object
+      properties:
+        authorization_url:
+          type: string
+          format: uri
+          readOnly: true
+        expires_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - authorization_url
+      - expires_at
     PaginatedAuditLogList:
       type: object
       required:
@@ -3411,12 +3704,16 @@ components:
       - CASH
       - CARD
       - TRANSFER
+      - POINT
+      - QR
       - MIXED
       type: string
       description: |-
         * `CASH` - Cash
         * `CARD` - Card
         * `TRANSFER` - Transfer
+        * `POINT` - Mercado Pago Point
+        * `QR` - Mercado Pago QR
         * `MIXED` - Mixed
     Product:
       type: object
@@ -3622,6 +3919,17 @@ components:
       required:
       - product_uuid
       - supplier_uuid
+    ResourceDiscovery:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          readOnly: true
+      required:
+      - results
     RoleEnum:
       enum:
       - OWNER
@@ -3767,12 +4075,18 @@ components:
           type: string
           nullable: true
           readOnly: true
+        mercado_pago:
+          allOf:
+          - $ref: '#/components/schemas/MercadoPagoSaleStatus'
+          nullable: true
+          readOnly: true
       required:
       - cashbox
       - created_at
       - details
       - invoice_status
       - invoice_tracking_id
+      - mercado_pago
       - payment_method
       - register
       - tenant_id
@@ -3782,10 +4096,12 @@ components:
       - uuid
     SaleReadStatusEnum:
       enum:
+      - PENDING
       - COMPLETED
       - CANCELLED
       type: string
       description: |-
+        * `PENDING` - Pending
         * `COMPLETED` - Completed
         * `CANCELLED` - Cancelled
     SaleRegister:
@@ -4056,6 +4372,14 @@ components:
       - product__uuid
       - total_quantity
       - total_revenue
+    TypeEnum:
+      enum:
+      - POINT
+      - QR
+      type: string
+      description: |-
+        * `POINT` - POINT
+        * `QR` - QR
     UnitEnum:
       enum:
       - KG
@@ -4157,6 +4481,14 @@ components:
       - email
       - password
       - username
+    WebhookReceipt:
+      type: object
+      properties:
+        received:
+          type: boolean
+          readOnly: true
+      required:
+      - received
   securitySchemes:
     jwtAuth:
       type: http

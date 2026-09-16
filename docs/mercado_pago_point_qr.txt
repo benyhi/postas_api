@@ -1,0 +1,179 @@
+Feature:
+Integracion Mercado Pago Point y QR dinamico
+
+Classification:
+large
+
+Context reviewed:
+- modelos, serializadores, vistas, permisos, billing, ARCA y tests de postas_api
+- billing, seguridad interna, cifrado ARCA, Alembic y tests de postas_platform_api
+- contratos oficiales OAuth, Orders API, Point, QR y Webhooks
+
+Current behavior:
+Postas solo completaba ventas locales y consumia billing en forma definitiva;
+no habia conexion OAuth, orden externa, inbox ni conciliador Mercado Pago.
+
+Proposed behavior:
+Usar una saga tenant-scoped e idempotente con stock y billing reservados hasta
+validar una orden canonica, mas configuracion OWNER-only y webhook durable.
+
+Implementation plan:
+1. Incorporar OAuth cifrado, cliente Orders API y reservas billing en Platform.
+2. Incorporar persistencia, asociacion de caja y ventas PENDING en Postas.
+3. Conciliar pagos, cancelaciones y refunds desde GET canonico bajo locks.
+4. Documentar contratos, configurar workers y verificar migraciones/tests.
+
+Files changed:
+- apps/mercado_pago, apps/sales, apps/cashbox y apps/platform_billing
+- config, migraciones, schema.yml, README, .env-example y docker-compose.yml
+- app/mercado_pago y app/billing en postas_platform_api
+
+Tests created or updated:
+- apps/mercado_pago/tests.py
+- tests/test_mercado_pago.py
+- tests/test_billing_reservations.py
+- tests/test_billing_reservations_postgres.py (opt-in)
+
+Documentation updated:
+- README.md, .env-example y docs/mercado_pago_point_qr.txt
+
+Checks run:
+- Postas enfocado: 30 tests OK
+- Postas completo: 162 tests OK, 3 opt-in omitidos
+- Platform enfocado: 26 tests OK, 1 PostgreSQL opt-in omitido
+- Platform completo: 96 tests OK, 3 opt-in omitidos
+- manage.py check y makemigrations --check --dry-run: OK
+- OpenAPI spectacular --validate: exit 0, con warnings preexistentes
+- Alembic head unico y SQL offline: OK
+- Docker Compose config: OK
+- concurrencia PostgreSQL real: no ejecutada, Docker Desktop no estaba activo
+
+Risks:
+- consistencia distribuida entre Postas, Platform y Mercado Pago
+- secretos OAuth, aislamiento tenant, concurrencia y reintentos mutables
+- pruebas fisicas y webhook HTTPS requieren infraestructura externa
+
+Important notes:
+- no hay reintentos mutables con claves nuevas
+- no se crearon commits
+
+MERCADO PAGO POINT Y QR DINAMICO
+================================
+
+Arquitectura
+------------
+
+Postas conserva ventas, stock, asociaciones de caja, la inbox de webhooks y la
+maquina de estados. postas_platform_api conserva una conexion OAuth por tenant,
+los tokens cifrados y las reservas de billing, y es el unico componente que se
+comunica con la Orders API de Mercado Pago. Los endpoints internos requieren
+X-Postas-Source: postas_api y X-Postas-Service-Token.
+
+No se completa una venta con el cuerpo de un webhook. El worker siempre obtiene
+GET /v1/orders/{id} y valida id, external_reference, type, importe, collector,
+moneda y live_mode antes de cambiar venta, stock, billing o ARCA.
+
+Configuracion y OAuth para OWNER
+--------------------------------
+
+1. POST /api/v1/mercado-pago/oauth/start/ devuelve authorization_url.
+2. El frontend navega a esa URL. Platform usa state temporal de un solo uso y
+   PKCE. El redirect registrado termina en
+   /api/v1/mercado-pago/oauth/callback de Platform.
+3. GET /api/v1/mercado-pago/connection/ muestra un estado sanitizado, nunca
+   access_token ni refresh_token.
+4. GET /api/v1/mercado-pago/terminals/ descubre Point y
+   GET /api/v1/mercado-pago/pos/ descubre POS QR.
+5. PUT /api/v1/mercado-pago/cash-registers/{uuid}/association/ asocia
+   terminal_id para Point y/o pos_id/external_pos_id para QR.
+6. DELETE /api/v1/mercado-pago/connection/ desvincula localmente, destruye los
+   tokens cifrados y limpia asociaciones. Se bloquea si hay operaciones activas.
+
+Todos estos endpoints son OWNER-only y tenant-scoped.
+
+Creacion de ventas
+------------------
+
+POST /api/v1/sales/ mantiene 201 para ventas locales. Una venta con POINT o QR
+requiere X-Idempotency-Key (1..160 caracteres) y devuelve 202. Se admite una
+sola linea externa, sola o combinada con una linea local distinta. La suma de
+las lineas debe coincidir exactamente con el total revalidado.
+
+Ejemplo Point:
+
+  X-Idempotency-Key: checkout-8b0b...
+  {"payments":[{"method":"POINT","amount":"1500.00"}],
+   "items":[{"product_id":"<uuid>","quantity":"1.000"}]}
+
+Ejemplo QR mixto:
+
+  {"payments":[{"method":"CASH","amount":"500.00"},
+               {"method":"QR","amount":"1000.00"}],
+   "items":[{"product_id":"<uuid>","quantity":"1.000"}]}
+
+Point dirige la orden a config.point.terminal_id. El cliente sigue el estado de
+la terminal fisica. QR usa type=qr, mode=dynamic y config.qr.external_pos_id;
+el frontend renderiza mercado_pago.qr_data como contenido QR, sin modificarlo.
+
+La venta se crea PENDING, reserva stock y billing. Un timeout de creacion deja
+la operacion pendiente: el worker reutiliza exactamente la misma clave. La
+lectura de venta expone solamente type, state, status, status_detail, qr_data y
+expires_at. El frontend puede hacer polling de la venta y solicitar
+POST /api/v1/sales/{uuid}/refresh-payment/.
+
+Estados terminales locales:
+
+- PAID: pago canonico acreditado, venta COMPLETED, billing confirmado y ARCA en outbox.
+- ACTION_REQUIRED: no terminal; requiere intervencion en la Point. El frontend
+  no debe reenviar cancelaciones automaticamente y debe continuar solo con
+  polling de la venta o refresh-payment.
+- CANCELLED, FAILED o EXPIRED: venta CANCELLED, billing liberado y stock restaurado una vez.
+- REFUND_PENDING: refund total solicitado; la venta sigue sin cancelarse.
+- REFUNDED: refund confirmado por GET canonico, venta CANCELLED y stock restaurado una vez.
+- CREATING, PENDING, CANCEL_REQUESTED o ERROR: continuar polling/reconciliacion.
+
+Webhooks y worker
+-----------------
+
+Configurar un webhook HTTPS de topic orders hacia:
+
+  POST /api/v1/webhooks/mercado-pago/orders/
+
+MERCADO_PAGO_WEBHOOK_SECRET valida x-signature con x-request-id y data.id. Las
+firmas fuera de la tolerancia temporal configurada se rechazan. Las
+notificaciones se deduplican y persisten antes de responder 200. Ejecutar un
+worker por proceso:
+
+  python manage.py run_mercado_pago_worker
+
+El worker exige PostgreSQL para row locks/skip-locked. Una notificacion que
+llega antes que el external_order_id queda RETRYING. Cierre de caja,
+desactivacion/desasociacion y desvinculacion se bloquean mientras existan pagos,
+cancelaciones o refunds activos.
+
+Cancelacion y refund
+--------------------
+
+POST /api/v1/sales/{uuid}/cancel/ conserva la prohibicion para cajas cerradas.
+Una venta externa PENDING solicita cancelacion remota. Si la orden requiere
+intervencion en la Point devuelve 409. Una venta PAID solicita refund total
+idempotente y devuelve 202. Stock y venta solo cambian tras confirmacion
+canonica. En una venta mixta, el refund remoto cubre solo el componente Mercado
+Pago; al cancelar toda la venta, el componente local deja de incluirse en caja.
+
+Pruebas reales
+--------------
+
+Usar usuarios y credenciales de prueba, un redirect/webhook HTTPS publico, un
+POS QR dinamico y una Point fisica. No reutilizar credenciales productivas. El
+MCP oficial puede ayudar durante desarrollo cuando este autenticado, pero no es
+dependencia de runtime.
+
+Referencias oficiales
+---------------------
+
+- Point: https://www.mercadopago.com.ar/developers/es/docs/mp-point/payment-processing
+- QR: https://www.mercadopago.com.ar/developers/es/docs/qr-code/payment-processing
+- Webhooks: https://www.mercadopago.com.ar/developers/es/docs/mp-point/notifications
+- OAuth: https://www.mercadopago.com.ar/developers/es/docs/security/oauth/creation
+- Renovacion OAuth: https://www.mercadopago.com.ar/developers/es/docs/security/oauth/renewal

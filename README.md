@@ -947,6 +947,19 @@ Respuesta:
 ```
 ---
 
+### Mercado Pago Point y QR dinamico
+
+La configuracion OWNER-only vive bajo `/api/v1/mercado-pago/`. Las ventas con
+una linea `POINT` o `QR` requieren `X-Idempotency-Key`, se crean `PENDING` y
+responden `202`; las ventas totalmente locales conservan `201`. Para QR, el
+frontend debe renderizar `mercado_pago.qr_data` y hacer polling de la lectura de
+venta o usar `POST /api/v1/sales/{uuid}/refresh-payment/` hasta un estado final.
+
+El webhook publico es `/api/v1/webhooks/mercado-pago/orders/` y el procesador
+durable se ejecuta con `python manage.py run_mercado_pago_worker` sobre
+PostgreSQL. Ver flujo OAuth, asociacion caja-terminal, cancelaciones, estados e
+idempotencia en [docs/mercado_pago_point_qr.txt](docs/mercado_pago_point_qr.txt).
+
 ### Notas para el frontend
 
 - El campo `key` es el identificador interno del archivo en el bucket. Guardarlo si después se necesita actualizar o eliminar la imagen.

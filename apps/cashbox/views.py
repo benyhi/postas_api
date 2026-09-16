@@ -22,6 +22,7 @@ from apps.cashbox.serializers import (
     CashboxReadSerializer,
 )
 from apps.notifications.cashbox import send_cashbox_notification_email
+from apps.mercado_pago.models import MercadoPagoOrder
 from apps.platform_billing.enforcement import check_billing_entitlement
 from apps.tenants.models import Tenant
 from core.permissions.roles import IsAdminOrOwner, IsAdminOrOwnerOrReadOnly
@@ -111,6 +112,14 @@ class CashRegisterDetailView(generics.RetrieveUpdateAPIView):
             ).exists():
                 return Response(
                     {"detail": "An open cashbox is using this cash register."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if not will_be_active and MercadoPagoOrder.objects.filter(
+                sale__cashbox__register=cash_register,
+                state__in=MercadoPagoOrder.ACTIVE_STATES,
+            ).exists():
+                return Response(
+                    {"detail": "Pending Mercado Pago operations are using this cash register."},
                     status=status.HTTP_409_CONFLICT,
                 )
             cash_register = serializer.save()
@@ -250,6 +259,15 @@ class CashboxCloseView(APIView):
                 return Response(
                     {"detail": "No open cashbox found."},
                     status=status.HTTP_404_NOT_FOUND,
+                )
+
+            if MercadoPagoOrder.objects.filter(
+                sale__cashbox=cashbox,
+                state__in=MercadoPagoOrder.ACTIVE_STATES,
+            ).exists():
+                return Response(
+                    {"detail": "Cashbox cannot be closed while Mercado Pago operations are pending."},
+                    status=status.HTTP_409_CONFLICT,
                 )
 
             cash_total = _cash_total_for_cashbox(cashbox)

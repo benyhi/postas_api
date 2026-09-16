@@ -115,21 +115,48 @@ class PlatformBillingClient:
             payload["context"] = context
         return self._request("POST", "/internal/v1/usage/check-and-consume", payload)
 
+    def reserve_usage(
+        self, tenant_id, feature_key: str, *, amount: int, external_id,
+        idempotency_key: str, metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._request("POST", "/internal/v1/billing/reservations/reserve", {
+            "tenant_id": str(tenant_id), "feature_key": feature_key,
+            "amount": amount, "external_id": str(external_id),
+            "idempotency_key": idempotency_key, "metadata": metadata or {},
+        })
+
+    def commit_usage_reservation(self, tenant_id, *, idempotency_key: str) -> dict[str, Any]:
+        return self._request("POST", "/internal/v1/billing/reservations/commit", {
+            "tenant_id": str(tenant_id), "feature_key": "pos_sales",
+            "idempotency_key": idempotency_key,
+        })
+
+    def release_usage_reservation(self, tenant_id, *, idempotency_key: str) -> dict[str, Any]:
+        return self._request("POST", "/internal/v1/billing/reservations/release", {
+            "tenant_id": str(tenant_id), "feature_key": "pos_sales",
+            "idempotency_key": idempotency_key,
+        })
+
     def _request(
         self,
         method: str,
         path: str,
         payload: dict[str, Any] | None = None,
+        *,
+        extra_headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         self._validate_configuration()
         body = None
         if payload is not None:
             body = json.dumps(payload, default=_json_default).encode("utf-8")
 
+        headers = self._headers(has_body=payload is not None)
+        if extra_headers:
+            headers.update(extra_headers)
         req = request.Request(
             f"{self.base_url}{path}",
             data=body,
-            headers=self._headers(has_body=payload is not None),
+            headers=headers,
             method=method,
         )
         try:
