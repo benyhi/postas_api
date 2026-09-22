@@ -1,4 +1,5 @@
 from decimal import Decimal
+from collections import defaultdict
 
 from rest_framework import serializers
 from drf_spectacular.utils import extend_schema_field
@@ -113,9 +114,41 @@ class SaleCreateSerializer(serializers.Serializer):
         if cashbox is None:
             raise serializers.ValidationError("The user's cashbox is no longer open.")
 
+        requested_quantities = defaultdict(Decimal)
+        for item in items:
+            requested_quantities[item['product_id']] += item['quantity']
+
+        locked_products = {
+            product.uuid: product
+            for product in Product.objects.select_for_update()
+            .filter(
+                uuid__in=requested_quantities,
+                tenant_id=request.tenant_id,
+            )
+            .order_by('uuid')
+        }
+        if len(locked_products) != len(requested_quantities):
+            raise serializers.ValidationError('One or more products are no longer available.')
+
+        for product_id, requested_quantity in requested_quantities.items():
+            product = locked_products[product_id]
+            if product.stock < requested_quantity:
+                raise serializers.ValidationError(
+                    f'Insufficient stock for {product.name}. '
+                    f'Available: {product.stock}, requested: {requested_quantity}.'
+                )
+
+        locked_total = sum(
+            locked_products[item['product_id']].price * item['quantity']
+            for item in items
+        )
+        if locked_total != total:
+            raise serializers.ValidationError('Product prices changed. Retry the sale.')
+
         details = []
         for item in items:
             product = item["product"]
+            product = locked_products[item['product_id']]
             price = product.price
             quantity = item["quantity"]
             subtotal = price * quantity

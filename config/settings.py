@@ -13,6 +13,8 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 from pathlib import Path
 import os
 
+from django.core.exceptions import ImproperlyConfigured
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -39,13 +41,12 @@ def env_bool(name, default="False"):
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv(
-    'SECRET_KEY',
-    'django-insecure-w$%ltt_)i(xmc9pmop=yevl2y!2oay8ea3t9xpg_)z6gf0c$0g',
-)
+SECRET_KEY = os.getenv('SECRET_KEY', '').strip()
+if not SECRET_KEY:
+    raise ImproperlyConfigured('SECRET_KEY is required.')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = env_bool('DEBUG', 'True')
+DEBUG = env_bool('DEBUG', 'False')
 
 ALLOWED_HOSTS = [
     h.strip()
@@ -57,6 +58,18 @@ CSRF_TRUSTED_ORIGINS = [
     for h in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',')
     if h.strip()
 ]
+
+# Production/preproduction transport security. Development keeps the current
+# permissive defaults; deployment manifests must opt in explicitly.
+SECURE_SSL_REDIRECT = env_bool('SECURE_SSL_REDIRECT', 'False')
+SESSION_COOKIE_SECURE = env_bool('SESSION_COOKIE_SECURE', 'False')
+CSRF_COOKIE_SECURE = env_bool('CSRF_COOKIE_SECURE', 'False')
+SECURE_HSTS_SECONDS = int(os.getenv('SECURE_HSTS_SECONDS', '0'))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool('SECURE_HSTS_INCLUDE_SUBDOMAINS', 'False')
+SECURE_HSTS_PRELOAD = env_bool('SECURE_HSTS_PRELOAD', 'False')
+USE_X_FORWARDED_HOST = env_bool('USE_X_FORWARDED_HOST', 'False')
+if env_bool('TRUST_PROXY_SSL_HEADER', 'False'):
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # Application definition
 
@@ -111,6 +124,13 @@ REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_THROTTLE_RATES': {
+        'auth_login_ip': os.getenv('AUTH_LOGIN_IP_RATE', '20/min'),
+        'auth_login_identity': os.getenv('AUTH_LOGIN_IDENTITY_RATE', '5/min'),
+        'password_reset_ip': os.getenv('PASSWORD_RESET_IP_RATE', '10/hour'),
+        'password_reset_identity': os.getenv('PASSWORD_RESET_IDENTITY_RATE', '3/hour'),
+        'password_reset_confirm': os.getenv('PASSWORD_RESET_CONFIRM_RATE', '10/hour'),
+    },
 }
 
 SPECTACULAR_SETTINGS = {
@@ -188,6 +208,23 @@ DATABASES = {
     )
 }
 
+CACHE_URL = os.getenv("CACHE_URL", "").strip()
+CACHE_KEY_PREFIX = os.getenv(
+    "CACHE_KEY_PREFIX",
+    f"postas:{os.getenv('ENV', 'development').strip() or 'development'}",
+).strip()
+CACHES = {
+    "default": {
+        "BACKEND": (
+            "django.core.cache.backends.redis.RedisCache"
+            if CACHE_URL
+            else "django.core.cache.backends.locmem.LocMemCache"
+        ),
+        "LOCATION": CACHE_URL or "postas-entitlements",
+        "KEY_PREFIX": CACHE_KEY_PREFIX,
+    }
+}
+
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
 
@@ -222,7 +259,8 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
@@ -254,6 +292,14 @@ POSTAS_PLATFORM_SERVICE_TOKEN = os.getenv("POSTAS_PLATFORM_SERVICE_TOKEN", "")
 POSTAS_PLATFORM_SOURCE = os.getenv("POSTAS_PLATFORM_SOURCE", "postas_api")
 POSTAS_PLATFORM_TIMEOUT_SECONDS = int(os.getenv("POSTAS_PLATFORM_TIMEOUT_SECONDS", "10"))
 POSTAS_PLATFORM_REQUIRE_TLS = env_bool("POSTAS_PLATFORM_REQUIRE_TLS", "True")
+POSTAS_PLATFORM_POOL_CONNECTIONS = int(os.getenv("POSTAS_PLATFORM_POOL_CONNECTIONS", "10"))
+POSTAS_PLATFORM_POOL_MAXSIZE = int(os.getenv("POSTAS_PLATFORM_POOL_MAXSIZE", "20"))
+BILLING_ENTITLEMENT_ALLOW_TTL_SECONDS = int(
+    os.getenv("BILLING_ENTITLEMENT_ALLOW_TTL_SECONDS", "60")
+)
+BILLING_ENTITLEMENT_DENY_TTL_SECONDS = int(
+    os.getenv("BILLING_ENTITLEMENT_DENY_TTL_SECONDS", "20")
+)
 ARCA_OUTBOX_POLL_SECONDS = float(os.getenv("ARCA_OUTBOX_POLL_SECONDS", "5"))
 ARCA_OUTBOX_BATCH_SIZE = int(os.getenv("ARCA_OUTBOX_BATCH_SIZE", "20"))
 MERCADO_PAGO_WEBHOOK_SECRET = os.getenv("MERCADO_PAGO_WEBHOOK_SECRET", "")

@@ -1,0 +1,32 @@
+Security hardening backend - implementation summary
+
+Scope
+- postas_api and postas_platform_api.
+- Authentication, tenant isolation, password reset, stock concurrency, CSV export, ARCA persistence and remote image fetching.
+
+Implemented phases
+1. Secure configuration defaults
+   - Django requires SECRET_KEY and defaults DEBUG to False.
+   - Platform requires its legacy API token by default.
+2. Authentication and tenant isolation
+   - Login and password-reset throttles are scoped by IP and hashed identity.
+   - Compatibility cloud/public routes now require JWT and derive tenant scope from the token.
+   - Password-reset tokens include Django's password-state token and are consumed under a row lock.
+3. Data integrity
+   - Product rows are locked in deterministic UUID order and stock is revalidated inside the sale transaction.
+   - Duplicate sale lines are validated using their aggregate quantity.
+4. Input/output hardening
+   - Text cells in product CSV exports are protected against spreadsheet formulas.
+   - ARCA payloads are recursively sanitized before persistence.
+   - Remote image downloads reject credentials, nonstandard ports, local/private addresses and unsafe redirects.
+
+Verification strategy
+- Focused behavior tests for auth throttling, reset replay, tenant image access, stock changes and CSV formulas.
+- Platform tests for API-token default, SSRF redirects and nested ARCA redaction.
+- Django check, migration drift check, focused suites and full suites where practical.
+- PostgreSQL remains required before deployment to prove select_for_update concurrency behavior; SQLite tests only prove revalidation behavior.
+
+Operational notes
+- Existing URLs remain stable, but cloud/public image routes are no longer anonymous.
+- Rate limits rely on Django's configured cache. Production/preproduction should use the shared Redis cache.
+- No database migration is expected for this hardening.

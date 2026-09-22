@@ -1,0 +1,84 @@
+Feature:
+Mejoras de rendimiento de billing, reportes y ventas
+
+Classification:
+large
+
+Context reviewed:
+- apps/platform_billing/client.py, enforcement.py y tests.py
+- apps/reports/views.py y tests.py
+- apps/sales/models.py, serializers.py, views.py, migrations y tests.py
+- apps/cashbox/views.py y tests.py
+- config/settings.py, docker-compose.yml, .env-example y README.md
+
+Current behavior:
+Cada validacion de billing creaba una conexion HTTP nueva. Los reportes cargaban
+ventas completas para agrupar pagos en Python y los filtros de fechas usaban
+transformaciones DATE sobre created_at. El reporte por metodo de pago sin fechas
+no aplicaba el default documentado de hoy.
+
+Proposed behavior:
+Los entitlements booleanos de reportes usan una cache corta y segura por tenant
+y feature. El cliente HTTP reutiliza una Session con pool. Los reportes agregan
+pagos simples en SQL, leen solo el JSON de pagos mixtos y filtran fechas mediante
+rangos datetime sargables. Las consultas frecuentes de ventas tienen indices
+compuestos y precargan relaciones usadas por los serializers.
+
+Implementation plan:
+1. Configurar cache local/Redis y limitarla a basic_reports/advanced_reports.
+2. Reemplazar urllib por requests.Session reutilizable sin retries automaticos.
+3. Optimizar agregaciones, rangos de fechas y select_related.
+4. Agregar indices compuestos mediante migracion sin backfill.
+5. Verificar tests, configuracion Django/Docker y planes PostgreSQL disponibles.
+
+Files changed:
+- .env-example
+- README.md
+- apps/platform_billing/client.py
+- apps/platform_billing/enforcement.py
+- apps/platform_billing/tests.py
+- apps/reports/views.py
+- apps/reports/tests.py
+- schema.yml
+- apps/sales/models.py
+- apps/sales/querysets.py
+- apps/sales/views.py
+- apps/sales/tests.py
+- apps/sales/migrations/0005_sale_query_indexes.py
+- config/settings.py
+- docker-compose.yml
+- requirements.txt
+
+Tests created or updated:
+- apps/platform_billing/tests.py
+- apps/reports/tests.py
+- apps/sales/tests.py
+
+Documentation updated:
+- README.md
+- .env-example
+- docs/mejoras_rendimiento_billing_reportes.txt
+
+Checks run:
+- manage.py test apps.platform_billing apps.reports apps.sales apps.cashbox: baseline passed (59 tests, 3 skipped)
+- manage.py test apps.platform_billing: passed (24 tests)
+- manage.py test apps.reports apps.sales: passed (21 tests)
+- manage.py test apps.platform_billing apps.reports apps.sales apps.cashbox: passed (77 tests, 3 skipped)
+- manage.py test: passed (150 tests, 3 skipped)
+- manage.py check: passed
+- manage.py makemigrations --check --dry-run: passed (no changes)
+- docker compose config --quiet: passed
+- manage.py spectacular --file schema.yml: passed with pre-existing warnings
+- LocMemCache/RedisCache backend selection: passed
+- PostgreSQL EXPLAIN ANALYZE: not available (Docker daemon not running)
+
+Risks:
+- Una revocacion permitida puede demorar hasta 60 segundos en reflejarse.
+- Una habilitacion posterior a una denegacion puede demorar hasta 20 segundos.
+- SQLite no valida el uso real de indices ni comportamiento PostgreSQL.
+
+Important notes:
+- Platform conserva la fuente de verdad.
+- resource_count, limites dinamicos y consumos nunca se cachean.
+- No se modificaron endpoints, formatos publicos ni roles.
+- No se realizaron cambios en postas_platform_api ni commits.

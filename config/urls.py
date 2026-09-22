@@ -15,6 +15,7 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
+from django.db import connection
 from django.http import JsonResponse
 from django.urls import path, include
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
@@ -29,8 +30,19 @@ def healthz(_request):
     return JsonResponse({"status": "ok"})
 
 
+def readyz(_request):
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT 1')
+            cursor.fetchone()
+    except Exception:
+        return JsonResponse({'status': 'unavailable'}, status=503)
+    return JsonResponse({'status': 'ready'})
+
+
 urlpatterns = [
     path('healthz/', healthz, name='healthz'),
+    path('readyz/', readyz, name='readyz'),
     path('admin/', admin.site.urls),
 
     # Docs

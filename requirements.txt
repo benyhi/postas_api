@@ -12,6 +12,8 @@ psycopg2-binary==2.9.11
 PyJWT==2.12.1
 python-decouple==3.8
 resend==2.25.0
+redis==8.1.0
+requests==2.34.2
 sqlparse==0.5.5
 tzdata==2025.3
 xlrd==2.0.2

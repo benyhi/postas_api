@@ -171,6 +171,15 @@ Mapa de guards actuales:
 | Reportes diarios, por fecha, por pago y resumen de caja | `basic_reports` | Valida antes de consultar datos |
 | Top productos | `advanced_reports` | Valida antes de consultar datos |
 
+Los entitlements booleanos `basic_reports` y `advanced_reports` se cachean por
+tenant y feature: 60 segundos para permisos y 20 segundos para denegaciones
+comerciales reconocidas. `resource_count`, limites mensuales y operaciones de
+consumo nunca usan cache. Configurar `CACHE_URL` habilita Redis; si queda vacio,
+se usa cache local por proceso. Un fallo de cache no evita la consulta a Platform.
+En despliegue, iniciar Redis antes de la API y aplicar la migracion de indices.
+Monitorear latencia de Platform, errores de cache y duracion de consultas sin
+registrar tenant IDs, tokens ni payloads.
+
 Respuesta estable de bloqueo:
 
 ```json
@@ -440,7 +449,7 @@ La documentación incluye **ejemplos de request/response**, **filtros** y **pagi
 | **Cash registers** | `GET/POST /api/v1/cash-registers/`, `GET/PATCH /api/v1/cash-registers/{uuid}/` | Todos listan terminales activas; ADMIN/OWNER crean, renombran y desactivan. No hay borrado fisico |
 | **Cashbox** | `POST /open/`, `POST /close/`, `GET /current/`, `GET /`, `GET /{uuid}/`, `POST /{uuid}/notify-email/` | `open/` exige `register_id`; `current/` y `close/` usan la sesion propia. ADMIN/OWNER pueden cerrar otra sesion enviando `cashbox_id` |
 | **Sales** | `GET/POST /api/v1/sales/`, `GET /{uuid}/`, `POST /{uuid}/cancel/` | EMPLOYEE vende y consulta solo su sesion abierta; ADMIN/OWNER ven el tenant. Filtros: `user_id`, `cashbox_id`, `register_id`, `payment_method`, `from`, `to`. Una venta de caja cerrada no puede anularse |
-| **Reports** | `GET sales/daily/`, `GET sales/by-date/`, `GET sales/by-payment/`, `GET products/top/`, `GET cashbox/summary/` | Reportes con filtros de fechas y enforcement de billing por feature |
+| **Reports** | `GET sales/daily/`, `GET sales/by-date/`, `GET sales/by-payment/`, `GET products/top/`, `GET cashbox/summary/` | Reportes con filtros de fechas y enforcement de billing por feature. Por metodo de pago usa hoy cuando no recibe fechas |
 | **Audit** | `GET /api/v1/audit/` | Logs de auditoría. Filtros: `action`, `entity`, `user`, `timestamp` |
 | **Suppliers** | `GET/POST /api/v1/suppliers/`, `GET/PATCH/DELETE /api/v1/suppliers/{uuid}/` | CRUD de proveedores (ADMIN/OWNER). DELETE es soft delete |
 | **Suppliers** | `GET/POST /api/v1/product-suppliers/`, `GET/PATCH/DELETE /api/v1/product-suppliers/{uuid}/` | Historial de relaciones producto-proveedor. Filtros: `product`, `is_current` |
@@ -967,3 +976,10 @@ idempotencia en [docs/mercado_pago_point_qr.txt](docs/mercado_pago_point_qr.txt)
 - Tamaño máximo por defecto: **5 MB**.
 
 ---
+## Hardening de seguridad
+
+- `SECRET_KEY` es obligatoria; la aplicacion no inicia si falta.
+- `DEBUG` usa `False` por defecto. Habilitarlo solo de forma explicita en desarrollo.
+- Login y recuperacion de contrasena tienen throttling por IP e identidad. Los limites se configuran con `AUTH_LOGIN_IP_RATE`, `AUTH_LOGIN_IDENTITY_RATE`, `PASSWORD_RESET_IP_RATE`, `PASSWORD_RESET_IDENTITY_RATE` y `PASSWORD_RESET_CONFIRM_RATE`.
+- Los endpoints `/api/v1/cloud/public/images/` conservan la URL por compatibilidad, pero requieren JWT. El tenant se obtiene del token y las keys de otro tenant responden `403`.
+- Los tokens de recuperacion de contrasena son de un solo uso: quedan invalidados luego de cambiar la contrasena.

@@ -40,6 +40,16 @@ class Sale(TenantModel):
     class Meta:
         db_table = "sales"
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["tenant_id", "status", "-created_at"],
+                name="sales_tenant_status_date_idx",
+            ),
+            models.Index(
+                fields=["tenant_id", "-created_at"],
+                name="sales_tenant_created_idx",
+            ),
+        ]
 
     def __str__(self):
         return f"Sale {self.uuid} - {self.total}"

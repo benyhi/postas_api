@@ -1044,13 +1044,12 @@ paths:
     get:
       operationId: v1_cloud_public_images_retrieve
       description: |-
-        GET /api/v1/cloud/public/images/?tenant_id=<uuid>            → lista imágenes (sin auth)
-        GET /api/v1/cloud/public/images/<path:key>/                  → metadata de una imagen (sin auth)
+        GET /api/v1/cloud/public/images/             -> lista del tenant autenticado
+        GET /api/v1/cloud/public/images/<path:key>/  -> metadata del tenant autenticado
       tags:
       - v1
       security:
       - jwtAuth: []
-      - {}
       responses:
         '200':
           description: No response body
@@ -1058,8 +1057,8 @@ paths:
     get:
       operationId: v1_cloud_public_images_retrieve_2
       description: |-
-        GET /api/v1/cloud/public/images/?tenant_id=<uuid>            → lista imágenes (sin auth)
-        GET /api/v1/cloud/public/images/<path:key>/                  → metadata de una imagen (sin auth)
+        GET /api/v1/cloud/public/images/             -> lista del tenant autenticado
+        GET /api/v1/cloud/public/images/<path:key>/  -> metadata del tenant autenticado
       parameters:
       - in: path
         name: key
@@ -1070,7 +1069,6 @@ paths:
       - v1
       security:
       - jwtAuth: []
-      - {}
       responses:
         '200':
           description: No response body
@@ -1684,7 +1682,7 @@ paths:
         name: from
         schema:
           type: string
-        description: 'Fecha desde (YYYY-MM-DD). Por defecto: hoy.'
+        description: Fecha desde (YYYY-MM-DD)
       - in: query
         name: limit
         schema:
@@ -1774,7 +1772,7 @@ paths:
     get:
       operationId: v1_reports_sales_by_payment_list
       description: Desglose de ventas agrupadas por metodo de pago. Filtra por rango
-        de fechas.
+        de fechas. Sin fechas, muestra solo hoy.
       summary: Ventas por metodo de pago
       parameters:
       - in: query
@@ -1786,7 +1784,7 @@ paths:
         name: from
         schema:
           type: string
-        description: 'Fecha desde (YYYY-MM-DD). Por defecto: hoy.'
+        description: Fecha desde (YYYY-MM-DD)
       - in: query
         name: register_id
         schema:
@@ -1840,7 +1838,7 @@ paths:
         name: from
         schema:
           type: string
-        description: 'Fecha desde (YYYY-MM-DD). Por defecto: hoy.'
+        description: Fecha desde (YYYY-MM-DD)
       - in: query
         name: register_id
         schema:

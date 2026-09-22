@@ -12,14 +12,21 @@ venv/
 
 # Django
 db.sqlite3
+*.db
 *.sqlite3
 *.log
 media/
+.pytest_cache/
 
 # Secrets / env files
 .env
 .env.*
 *.env
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
 
 # Debug scripts
 debug_*.py
@@ -28,6 +35,7 @@ test_endpoints.py
 # Git
 .git/
 .gitignore
+.github/
 
 # Docker
 Dockerfile
@@ -40,7 +48,17 @@ docker-compose*.yml
 
 # Local agent tooling
 .codex/
+.agents/
 AGENT.md
+AGENTS.md
+
+# Non-runtime artifacts
+tests/
+docs/
+schema.yml
+docker/
+README.md
+preprod.env.example
 
 # OS
 .DS_Store

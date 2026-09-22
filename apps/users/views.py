@@ -1,5 +1,9 @@
 from django.core import signing
 from django.conf import settings as django_settings
+from django.contrib.auth.password_validation import validate_password
+from django.contrib.auth.tokens import default_token_generator
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 
 from rest_framework import generics, status
 from rest_framework.response import Response
@@ -11,6 +15,11 @@ from apps.notifications.password_reset import send_password_reset_email
 from apps.platform_billing.enforcement import check_billing_entitlement
 from apps.users.models import User
 from apps.users.serializers import UserSerializer, UserReadSerializer
+from apps.users.throttles import (
+    PasswordResetConfirmRateThrottle,
+    PasswordResetIdentityRateThrottle,
+    PasswordResetIPRateThrottle,
+)
 from core.permissions.roles import IsOwner
 from core.utils.audit import log_action
 
@@ -122,9 +131,21 @@ _RESET_SALT = "postas-password-reset"
 _RESET_MAX_AGE = 86400  # 24 hours
 
 
+def _consume_password_reset(user_pk, reset_token, new_password):
+    with transaction.atomic():
+        user = User.objects.all_with_inactive().select_for_update().get(pk=user_pk)
+        if not default_token_generator.check_token(user, reset_token):
+            return False
+        validate_password(new_password, user=user)
+        user.set_password(new_password)
+        user.save(update_fields=['password'])
+    return True
+
+
 @extend_schema(tags=["Auth"])
 class PasswordResetRequestView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [PasswordResetIPRateThrottle, PasswordResetIdentityRateThrottle]
 
     @extend_schema(
         summary="Solicitar restablecimiento de contraseña",
@@ -143,9 +164,14 @@ class PasswordResetRequestView(APIView):
         except User.DoesNotExist:
             return Response(_ok_msg)
 
-        token = signing.dumps({"user_pk": str(user.pk)}, salt=_RESET_SALT)
-        reset_url = f"{django_settings.FRONTEND_URL}/reset-password?token={token}"
-
+        token = signing.dumps(
+            {
+                'user_pk': str(user.pk),
+                'reset_token': default_token_generator.make_token(user),
+            },
+            salt=_RESET_SALT,
+        )
+        reset_url = f'{django_settings.FRONTEND_URL}/reset-password?token={token}'
         send_password_reset_email(user, reset_url)
         return Response(_ok_msg)
 
@@ -153,6 +179,7 @@ class PasswordResetRequestView(APIView):
 @extend_schema(tags=["Auth"])
 class PasswordResetConfirmView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [PasswordResetConfirmRateThrottle]
 
     @extend_schema(
         summary="Confirmar restablecimiento de contraseña",
@@ -171,13 +198,21 @@ class PasswordResetConfirmView(APIView):
         try:
             data = signing.loads(token, salt=_RESET_SALT, max_age=_RESET_MAX_AGE)
             user_pk = data["user_pk"]
+            reset_token = data.get('reset_token', '')
             user = User.objects.all_with_inactive().get(pk=user_pk)
         except signing.SignatureExpired:
             return Response({"detail": "El enlace ha expirado. Solicitá uno nuevo."}, status=status.HTTP_400_BAD_REQUEST)
         except (signing.BadSignature, KeyError, User.DoesNotExist, ValueError, TypeError):
             return Response({"detail": "Enlace inválido."}, status=status.HTTP_400_BAD_REQUEST)
 
-        user.set_password(new_password)
-        user.save()
+        try:
+            reset_succeeded = _consume_password_reset(user_pk, reset_token, new_password)
+        except DjangoValidationError as exc:
+            return Response({'detail': list(exc.messages)}, status=status.HTTP_400_BAD_REQUEST)
+        except User.DoesNotExist:
+            reset_succeeded = False
+
+        if not reset_succeeded:
+            return Response({'detail': 'Enlace invalido.'}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response({"detail": "Contraseña restablecida exitosamente."})

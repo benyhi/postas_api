@@ -1,0 +1,28 @@
+https://{$PREPROD_HOST:localhost}:8443 {
+    tls internal
+    encode zstd gzip
+
+    @internal path /internal/*
+    handle @internal {
+        respond 404
+    }
+
+    @platform_oauth_callback path /api/v1/mercado-pago/oauth/callback
+    handle @platform_oauth_callback {
+        reverse_proxy postas_platform:8001
+    }
+
+    handle_path /static/* {
+        root * /srv/static
+        file_server
+    }
+
+    handle {
+        reverse_proxy postas_api:8000
+    }
+}
+
+http://127.0.0.1:8080 {
+    respond /healthz 200
+    respond 404
+}

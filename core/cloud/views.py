@@ -3,7 +3,7 @@ import time
 
 from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -159,11 +159,11 @@ class ImageDetailView(APIView):
 
 class PublicImageView(APIView):
     """
-    GET /api/v1/cloud/public/images/?tenant_id=<uuid>            → lista imágenes (sin auth)
-    GET /api/v1/cloud/public/images/<path:key>/                  → metadata de una imagen (sin auth)
+    GET /api/v1/cloud/public/images/             -> lista del tenant autenticado
+    GET /api/v1/cloud/public/images/<path:key>/  -> metadata del tenant autenticado
     """
 
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, key: str | None = None):
         service, err = _get_service()
@@ -171,20 +171,15 @@ class PublicImageView(APIView):
             return err
 
         if key:
+            if not _assert_tenant_key(request.tenant_id, key):
+                return Response({'error': 'No autorizado.'}, status=status.HTTP_403_FORBIDDEN)
             result = service.get(key)
             if result["success"]:
                 return Response(result)
             return Response({"error": result.get("error")}, status=status.HTTP_404_NOT_FOUND)
 
-        tenant_id = request.query_params.get("tenant_id", "")
-        if not tenant_id:
-            return Response(
-                {"error": "Se requiere el parámetro 'tenant_id'."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         sub_prefix = request.query_params.get("prefix", "")
-        prefix = _tenant_prefix(tenant_id, sub_prefix)
+        prefix = _tenant_prefix(request.tenant_id, sub_prefix)
         search = request.query_params.get("search", "").strip().lower()
         token = request.query_params.get("token") or None
         try:

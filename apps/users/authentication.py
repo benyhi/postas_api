@@ -4,6 +4,7 @@ from rest_framework import serializers
 from drf_spectacular.utils import extend_schema, OpenApiExample, inline_serializer
 
 from apps.users.models import User
+from apps.users.throttles import LoginIPRateThrottle, LoginIdentityRateThrottle
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -64,6 +65,7 @@ _token_response = inline_serializer("TokenResponse", fields={
 @extend_schema(tags=["Auth"])
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
+    throttle_classes = [LoginIPRateThrottle, LoginIdentityRateThrottle]
 
     @extend_schema(
         summary="Login",

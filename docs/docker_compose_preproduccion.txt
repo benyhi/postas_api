@@ -1,0 +1,176 @@
+Feature:
+Docker Compose de preproduccion para postas_api y postas_platform_api
+
+Classification:
+large
+
+Context reviewed:
+- Dockerfile, docker-compose.yml, .dockerignore y settings de postas_api
+- Dockerfile, docker-compose.yml, dependencias y configuracion de postas_platform_api
+- workers ARCA y Mercado Pago
+- seguridad service-to-service y callback OAuth
+- migraciones Django y Alembic
+- healthchecks, estaticos y CI existente
+
+Current behavior:
+- El Compose local usa bind mounts, runserver, uvicorn --reload y una base compartida.
+- El Compose de postas_api ya incluye Platform, mientras Platform tiene otro Compose independiente.
+- El contexto Docker de Platform incluia archivos de base SQLite locales.
+- Las migraciones y el seed se ejecutaban dentro del arranque de la API.
+- Solo se publicaban liveness checks sin comprobar la base.
+
+Proposed behavior:
+- docker-compose.preprod.yml es la orquestacion conjunta de preproduccion.
+- Las aplicaciones usan procesos equivalentes a produccion y no montan codigo fuente.
+- Postas y Platform tienen bases, usuarios y volumenes independientes.
+- Solo Caddy publica HTTPS; las APIs, Redis y PostgreSQL quedan sin puertos de host.
+- El callback OAuth exacto se enruta a Platform y /internal/v1 no se publica.
+- Migraciones, collectstatic y seed son jobs one-shot previos a APIs y workers.
+- preprod_validate rechaza placeholders, secretos cortos, URLs de base cruzadas y
+  callbacks OAuth sin HTTPS antes de ejecutar migraciones.
+- Las credenciales reales viven en preprod.env, nunca en Git.
+
+Implementation plan:
+1. Endurecer contextos e imagenes Docker.
+2. Separar bases, redes, volumenes y secretos.
+3. Agregar jobs de migracion y procesos sin reload.
+4. Agregar gateway HTTPS, estaticos y aislamiento de endpoints internos.
+5. Separar liveness de readiness con comprobacion de base.
+6. Documentar configuracion, arranque, validacion y recuperacion.
+7. Ejecutar review, tests y checks de entrega.
+
+Uso:
+1. Mantener ambos repositorios como hermanos:
+
+   D:\benja\proyectos\postas_api
+   D:\benja\proyectos\postas_platform_api
+
+2. Crear el archivo local de credenciales:
+
+   Copy-Item preprod.env.example preprod.env
+
+3. Reemplazar todos los valores CHANGE_ME. Usar credenciales exclusivas de
+   desarrollo/preproduccion. No reutilizarlas en produccion.
+
+   Para generar valores aleatorios se puede ejecutar varias veces:
+
+   .\env\Scripts\python.exe -c 'import secrets; print(secrets.token_urlsafe(48))'
+
+4. Si se prueban ARCA o Mercado Pago, configurar keyrings Fernet separados.
+   Una clave de desarrollo se puede generar desde el entorno de Platform:
+
+   ..\postas_platform_api\env\Scripts\python.exe -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+
+   El valor de cada variable MASTER_KEYS debe ser un objeto JSON key_id -> key.
+   ARCA_PRODUCTION_CALLS_ENABLED debe permanecer false en preproduccion.
+
+5. Validar la configuracion sin iniciar contenedores:
+
+   docker compose --env-file preprod.env -f docker-compose.preprod.yml config --quiet
+
+6. Construir e iniciar:
+
+   docker compose --env-file preprod.env -f docker-compose.preprod.yml up --build -d
+
+7. Revisar estado y logs:
+
+   docker compose --env-file preprod.env -f docker-compose.preprod.yml ps
+   docker compose --env-file preprod.env -f docker-compose.preprod.yml logs --tail 200
+
+8. Probar el gateway:
+
+   curl.exe -k https://localhost:8443/healthz/
+   curl.exe -k https://localhost:8443/readyz/
+
+   Caddy usa una CA local persistida en caddy_data. Para evitar advertencias del
+   navegador, exportar y confiar solamente el certificado raiz publico de esa CA.
+
+9. Detener conservando datos:
+
+   docker compose --env-file preprod.env -f docker-compose.preprod.yml down
+
+   Agregar --volumes elimina las dos bases y la CA local. Es una operacion
+   destructiva y solo debe usarse cuando se quiera reiniciar todo el entorno.
+
+Arquitectura:
+- gateway: unico puerto publicado, HTTPS 8443.
+- postas_api: Gunicorn, accesible solo por la red backend.
+- postas_platform: Uvicorn multi-worker, accesible solo por la red backend.
+- postas_db y platform_db: PostgreSQL independientes en la red data interna.
+- redis: cache privada en data.
+- preprod_validate: validacion fail-fast de secretos y contratos de entorno.
+- postas_migrate: migrate + collectstatic y luego termina.
+- platform_migrate: Alembic + seed idempotente y luego termina.
+- arca_outbox_worker, mercado_pago_worker y platform_arca_worker: procesos separados.
+
+Seguridad:
+- preprod.env esta ignorado por Git por terminar en .env.
+- El Compose exige secret key, tokens internos, URLs y credenciales de base.
+- Los defaults CHANGE_ME solo existen en la plantilla y no deben usarse al iniciar.
+- Platform acepta HTTP interno porque la red Docker es privada y autenticada;
+  el trafico publico entra por HTTPS en Caddy.
+- /internal/v1 no se enruta a Platform desde el gateway.
+- El HSTS de preproduccion es corto porque se usa una CA local.
+
+Files changed:
+- postas_api/docker-compose.preprod.yml
+- postas_api/preprod.env.example
+- postas_api/docker/caddy/Caddyfile.preprod
+- postas_api/Dockerfile
+- postas_api/.dockerignore
+- postas_api/config/settings.py
+- postas_api/config/urls.py
+- postas_api/core/tests.py
+- postas_api/scripts/validate_preprod_env.py
+- postas_api/.github/workflows/deploy.yml
+- postas_platform_api/Dockerfile
+- postas_platform_api/.dockerignore
+- postas_platform_api/requirements.txt
+- postas_platform_api/requirements-dev.txt
+- postas_platform_api/app/api/routes.py
+- postas_platform_api/tests/test_billing.py
+- postas_platform_api/scripts/check_alembic_heads.py
+- postas_platform_api/.github/workflows/ci.yml
+
+Tests created or updated:
+- postas_api/core/tests.py
+- postas_platform_api/tests/test_billing.py
+
+Documentation updated:
+- postas_api/docs/docker_compose_preproduccion.txt
+- postas_platform_api/README.md
+
+Checks run:
+- docker compose config con la plantilla y con entorno de smoke: passed
+- build de las dos imagenes con contextos reales: passed
+- arranque integrado con PostgreSQL, Redis, migraciones, seed y workers: passed
+- Django migrations en PostgreSQL: 41 aplicadas
+- Alembic en PostgreSQL: head 20260907_01
+- gateway /healthz/ y /readyz/: HTTP 200
+- gateway /static/admin/css/base.css: HTTP 200
+- gateway /internal/v1/plans: HTTP 404
+- callback OAuth publico de Platform sin parametros: HTTP 422
+- solo gateway publicado en 127.0.0.1:8443: passed
+- imagenes sin .env, bases locales, claves ni certificados: passed
+- postas_api core.tests: 6 passed
+- postas_api integraciones enfocadas: 93 passed
+- postas_platform_api suite completa: 99 passed, 3 skipped
+- pip check en ambos entornos: passed
+- manage.py check: passed
+- makemigrations --check --dry-run: passed
+- git diff --check en ambos repositorios: passed
+- revision independiente: sin hallazgos blocker/high
+
+Risks:
+- Caddy local CA debe manejarse solo como confianza de preproduccion.
+- Credenciales ARCA y Mercado Pago deben ser siempre de homologacion/desarrollo.
+- Los tags base y de servicios son mutables y las dependencias transitivas no
+  tienen lock con hashes. Conviene fijar patch/digest y constraints en una fase
+  posterior de reproducibilidad.
+- Los dos repositorios deben mantener commits y despliegues separados.
+
+Important notes:
+- El Compose local existente no fue reemplazado; sigue siendo el flujo rapido de desarrollo.
+- El frontend queda fuera del stack backend y puede conectarse al gateway HTTPS.
+- El stack usado para el smoke se detuvo sin --volumes; sus volumenes de prueba
+  quedaron preservados para permitir una nueva ejecucion o eliminacion manual.

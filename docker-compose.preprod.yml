@@ -1,0 +1,381 @@
+x-postas-image: &postas-image
+  image: postas-api-preprod:local
+  build:
+    context: .
+
+x-platform-image: &platform-image
+  image: postas-platform-api-preprod:local
+  build:
+    context: '${POSTAS_PLATFORM_PATH:-../postas_platform_api}'
+
+x-postas-environment: &postas-environment
+  SECRET_KEY: '${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY is required}'
+  ENV: preproduction
+  DEBUG: 'False'
+  ALLOWED_HOSTS: '${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}'
+  CSRF_TRUSTED_ORIGINS: '${DJANGO_CSRF_TRUSTED_ORIGINS:-https://localhost:8443}'
+  SECURE_SSL_REDIRECT: 'True'
+  SESSION_COOKIE_SECURE: 'True'
+  CSRF_COOKIE_SECURE: 'True'
+  SECURE_HSTS_SECONDS: '${SECURE_HSTS_SECONDS:-300}'
+  SECURE_HSTS_INCLUDE_SUBDOMAINS: 'False'
+  SECURE_HSTS_PRELOAD: 'False'
+  TRUST_PROXY_SSL_HEADER: 'True'
+  USE_X_FORWARDED_HOST: 'True'
+  DATABASE_URL: '${POSTAS_DATABASE_URL:?POSTAS_DATABASE_URL is required}'
+  CACHE_URL: redis://redis:6379/1
+  CACHE_KEY_PREFIX: '${CACHE_KEY_PREFIX:-postas:preproduction}'
+  BILLING_ENTITLEMENT_ALLOW_TTL_SECONDS: '${BILLING_ENTITLEMENT_ALLOW_TTL_SECONDS:-60}'
+  BILLING_ENTITLEMENT_DENY_TTL_SECONDS: '${BILLING_ENTITLEMENT_DENY_TTL_SECONDS:-20}'
+  PORT: '8000'
+  WEB_CONCURRENCY: '${WEB_CONCURRENCY:-2}'
+  GUNICORN_TIMEOUT: '${GUNICORN_TIMEOUT:-60}'
+  FRONTEND_URL: '${FRONTEND_URL:-https://localhost:3000}'
+  EMAIL_PROVIDER: '${EMAIL_PROVIDER:-django}'
+  EMAIL_FALLBACK_PROVIDER: '${EMAIL_FALLBACK_PROVIDER:-django}'
+  EMAIL_PROVIDER_FALLBACK_ENABLED: '${EMAIL_PROVIDER_FALLBACK_ENABLED:-false}'
+  EMAIL_BACKEND: '${EMAIL_BACKEND:-django.core.mail.backends.console.EmailBackend}'
+  DEFAULT_FROM_EMAIL: '${DEFAULT_FROM_EMAIL:-POSTAS Preprod <noreply@localhost>}'
+  EMAIL_TIMEOUT: '${EMAIL_TIMEOUT:-20}'
+  RESEND_API_KEY: '${RESEND_API_KEY:-}'
+  R2_BUCKET_NAME: '${R2_BUCKET_NAME:-}'
+  R2_ACCESS_KEY_ID: '${R2_ACCESS_KEY_ID:-}'
+  R2_SECRET_ACCESS_KEY: '${R2_SECRET_ACCESS_KEY:-}'
+  R2_ENDPOINT_URL: '${R2_ENDPOINT_URL:-}'
+  R2_PUBLIC_URL: '${R2_PUBLIC_URL:-}'
+  R2_REGION: '${R2_REGION:-auto}'
+  POSTAS_PLATFORM_API_URL: http://postas_platform:8001
+  POSTAS_PLATFORM_SERVICE_TOKEN: '${POSTAS_PLATFORM_SERVICE_TOKEN:?POSTAS_PLATFORM_SERVICE_TOKEN is required}'
+  POSTAS_PLATFORM_SOURCE: postas_api
+  POSTAS_PLATFORM_TIMEOUT_SECONDS: '${POSTAS_PLATFORM_TIMEOUT_SECONDS:-10}'
+  POSTAS_PLATFORM_REQUIRE_TLS: 'False'
+  ARCA_OUTBOX_POLL_SECONDS: '${ARCA_OUTBOX_POLL_SECONDS:-5}'
+  ARCA_OUTBOX_BATCH_SIZE: '${ARCA_OUTBOX_BATCH_SIZE:-20}'
+  MERCADO_PAGO_WEBHOOK_SECRET: '${MERCADO_PAGO_WEBHOOK_SECRET:-}'
+  MERCADO_PAGO_WORKER_POLL_SECONDS: '${MERCADO_PAGO_WORKER_POLL_SECONDS:-5}'
+  MERCADO_PAGO_WORKER_BATCH_SIZE: '${MERCADO_PAGO_WORKER_BATCH_SIZE:-20}'
+  MERCADO_PAGO_WORKER_STALE_SECONDS: '${MERCADO_PAGO_WORKER_STALE_SECONDS:-300}'
+  MERCADO_PAGO_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS: '${MERCADO_PAGO_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS:-300}'
+  AI_EXTRACTOR_BASE_URL: http://postas_platform:8001/api/v1
+  AI_EXTRACTOR_TOKEN: '${AI_EXTRACTOR_TOKEN:?AI_EXTRACTOR_TOKEN is required}'
+  AI_EXTRACTOR_SOURCE: postas_api
+
+x-platform-environment: &platform-environment
+  APP_NAME: Postas Platform API
+  API_PREFIX: /api/v1
+  DATABASE_URL: '${PLATFORM_DATABASE_URL:?PLATFORM_DATABASE_URL is required}'
+  POSTAS_SERVICE_TOKEN: '${POSTAS_PLATFORM_SERVICE_TOKEN:?POSTAS_PLATFORM_SERVICE_TOKEN is required}'
+  POSTAS_SERVICE_TOKEN_HEADER: X-Postas-Service-Token
+  POSTAS_SERVICE_SOURCE_HEADER: X-Postas-Source
+  POSTAS_INTERNAL_REQUIRE_TLS: 'False'
+  ALLOWED_REQUEST_SOURCES: postas_api
+  POSTAS_AI_API_TOKEN: '${AI_EXTRACTOR_TOKEN:?AI_EXTRACTOR_TOKEN is required}'
+  REQUIRE_API_TOKEN: 'True'
+  POSTAS_AI_TOKEN_HEADER: X-Postas-AI-Token
+  POSTAS_AI_SOURCE_HEADER: X-Postas-Source
+  ARCA_CREDENTIAL_MASTER_KEYS: '${POSTAS_PLATFORM_ARCA_CREDENTIAL_MASTER_KEYS:-}'
+  ARCA_CREDENTIAL_ACTIVE_KEY_ID: '${POSTAS_PLATFORM_ARCA_CREDENTIAL_ACTIVE_KEY_ID:-}'
+  ARCA_PRODUCTION_CALLS_ENABLED: '${POSTAS_PLATFORM_ARCA_PRODUCTION_CALLS_ENABLED:-false}'
+  ARCA_TIMEOUT_SECONDS: '${POSTAS_PLATFORM_ARCA_TIMEOUT_SECONDS:-30}'
+  ARCA_WORKER_POLL_SECONDS: '${POSTAS_PLATFORM_ARCA_WORKER_POLL_SECONDS:-5}'
+  ARCA_WORKER_BATCH_SIZE: '${POSTAS_PLATFORM_ARCA_WORKER_BATCH_SIZE:-20}'
+  ARCA_CONSUMER_FINAL_IDENTIFICATION_THRESHOLD: '${POSTAS_PLATFORM_ARCA_CONSUMER_FINAL_IDENTIFICATION_THRESHOLD:-10000000}'
+  MERCADO_PAGO_CLIENT_ID: '${POSTAS_PLATFORM_MERCADO_PAGO_CLIENT_ID:-}'
+  MERCADO_PAGO_CLIENT_SECRET: '${POSTAS_PLATFORM_MERCADO_PAGO_CLIENT_SECRET:-}'
+  MERCADO_PAGO_REDIRECT_URI: '${POSTAS_PLATFORM_MERCADO_PAGO_REDIRECT_URI:-https://localhost:8443/api/v1/mercado-pago/oauth/callback}'
+  MERCADO_PAGO_PLATFORM_ID: '${POSTAS_PLATFORM_MERCADO_PAGO_PLATFORM_ID:-}'
+  MERCADO_PAGO_APPLICATION_ID: '${POSTAS_PLATFORM_MERCADO_PAGO_APPLICATION_ID:-}'
+  MERCADO_PAGO_INTEGRATOR_ID: '${POSTAS_PLATFORM_MERCADO_PAGO_INTEGRATOR_ID:-}'
+  MERCADO_PAGO_CONNECT_TIMEOUT_SECONDS: '${POSTAS_PLATFORM_MERCADO_PAGO_CONNECT_TIMEOUT_SECONDS:-5}'
+  MERCADO_PAGO_READ_TIMEOUT_SECONDS: '${POSTAS_PLATFORM_MERCADO_PAGO_READ_TIMEOUT_SECONDS:-20}'
+  MERCADO_PAGO_WRITE_TIMEOUT_SECONDS: '${POSTAS_PLATFORM_MERCADO_PAGO_WRITE_TIMEOUT_SECONDS:-20}'
+  MERCADO_PAGO_OAUTH_STATE_TTL_SECONDS: '${POSTAS_PLATFORM_MERCADO_PAGO_OAUTH_STATE_TTL_SECONDS:-600}'
+  MERCADO_PAGO_REFRESH_SKEW_SECONDS: '${POSTAS_PLATFORM_MERCADO_PAGO_REFRESH_SKEW_SECONDS:-300}'
+  MERCADO_PAGO_CREDENTIAL_MASTER_KEYS: '${POSTAS_PLATFORM_MERCADO_PAGO_CREDENTIAL_MASTER_KEYS:-}'
+  MERCADO_PAGO_CREDENTIAL_ACTIVE_KEY_ID: '${POSTAS_PLATFORM_MERCADO_PAGO_CREDENTIAL_ACTIVE_KEY_ID:-}'
+  AI_PROVIDER: '${POSTAS_PLATFORM_AI_PROVIDER:-mock}'
+  FALLBACK_AI_PROVIDER: '${POSTAS_PLATFORM_FALLBACK_AI_PROVIDER:-}'
+  MAX_AI_ATTEMPTS: '${POSTAS_PLATFORM_MAX_AI_ATTEMPTS:-1}'
+  GOOGLE_API_KEY: '${POSTAS_PLATFORM_GOOGLE_API_KEY:-}'
+  GOOGLE_MODEL: '${POSTAS_PLATFORM_GOOGLE_MODEL:-gemini-2.5-flash-lite}'
+  IMAGE_DOWNLOAD_TIMEOUT_SECONDS: '${POSTAS_PLATFORM_IMAGE_DOWNLOAD_TIMEOUT_SECONDS:-15}'
+  MAX_IMAGE_BYTES: '${POSTAS_PLATFORM_MAX_IMAGE_BYTES:-10485760}'
+  ACCEPTED_CONFIDENCE_THRESHOLD: '${POSTAS_PLATFORM_ACCEPTED_CONFIDENCE_THRESHOLD:-0.85}'
+  MINIMUM_CONFIDENCE_THRESHOLD: '${POSTAS_PLATFORM_MINIMUM_CONFIDENCE_THRESHOLD:-0.60}'
+  INPUT_TOKEN_COST_PER_MILLION: '${POSTAS_PLATFORM_INPUT_TOKEN_COST_PER_MILLION:-0}'
+  OUTPUT_TOKEN_COST_PER_MILLION: '${POSTAS_PLATFORM_OUTPUT_TOKEN_COST_PER_MILLION:-0}'
+  PORT: '8001'
+  WEB_CONCURRENCY: '${PLATFORM_WEB_CONCURRENCY:-2}'
+  FORWARDED_ALLOW_IPS: '*'
+
+services:
+  preprod_validate:
+    <<: *postas-image
+    restart: 'no'
+    command: python scripts/validate_preprod_env.py
+    environment:
+      DJANGO_SECRET_KEY: '${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY is required}'
+      POSTAS_PLATFORM_SERVICE_TOKEN: '${POSTAS_PLATFORM_SERVICE_TOKEN:?POSTAS_PLATFORM_SERVICE_TOKEN is required}'
+      AI_EXTRACTOR_TOKEN: '${AI_EXTRACTOR_TOKEN:?AI_EXTRACTOR_TOKEN is required}'
+      POSTAS_DB_PASSWORD: '${POSTAS_DB_PASSWORD:?POSTAS_DB_PASSWORD is required}'
+      PLATFORM_DB_PASSWORD: '${PLATFORM_DB_PASSWORD:?PLATFORM_DB_PASSWORD is required}'
+      POSTAS_DATABASE_URL: '${POSTAS_DATABASE_URL:?POSTAS_DATABASE_URL is required}'
+      PLATFORM_DATABASE_URL: '${PLATFORM_DATABASE_URL:?PLATFORM_DATABASE_URL is required}'
+      MERCADO_PAGO_REDIRECT_URI: '${POSTAS_PLATFORM_MERCADO_PAGO_REDIRECT_URI:-https://localhost:8443/api/v1/mercado-pago/oauth/callback}'
+    healthcheck:
+      disable: true
+
+  postas_db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: '${POSTAS_DB_NAME:?POSTAS_DB_NAME is required}'
+      POSTGRES_USER: '${POSTAS_DB_USER:?POSTAS_DB_USER is required}'
+      POSTGRES_PASSWORD: '${POSTAS_DB_PASSWORD:?POSTAS_DB_PASSWORD is required}'
+    volumes:
+      - postas_postgres_data:/var/lib/postgresql/data
+    networks:
+      - data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  platform_db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: '${PLATFORM_DB_NAME:?PLATFORM_DB_NAME is required}'
+      POSTGRES_USER: '${PLATFORM_DB_USER:?PLATFORM_DB_USER is required}'
+      POSTGRES_PASSWORD: '${PLATFORM_DB_PASSWORD:?PLATFORM_DB_PASSWORD is required}'
+    volumes:
+      - platform_postgres_data:/var/lib/postgresql/data
+    networks:
+      - data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    networks:
+      - data
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  platform_migrate:
+    <<: *platform-image
+    restart: 'no'
+    command: sh -c 'python -m alembic upgrade head && python scripts/seed_billing.py'
+    environment: *platform-environment
+    networks:
+      - data
+    depends_on:
+      preprod_validate:
+        condition: service_completed_successfully
+      platform_db:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
+  postas_platform:
+    <<: *platform-image
+    restart: unless-stopped
+    init: true
+    command:
+      - uvicorn
+      - main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - '8001'
+      - --workers
+      - '${PLATFORM_WEB_CONCURRENCY:-2}'
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - '*'
+    environment: *platform-environment
+    networks:
+      - backend
+      - data
+    depends_on:
+      platform_migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - --fail
+        - http://127.0.0.1:8001/api/v1/ready
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+
+  platform_arca_worker:
+    <<: *platform-image
+    restart: unless-stopped
+    init: true
+    command: python -m app.arca.worker
+    environment: *platform-environment
+    networks:
+      - backend
+      - data
+    depends_on:
+      platform_migrate:
+        condition: service_completed_successfully
+      postas_platform:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    security_opt:
+      - no-new-privileges:true
+
+  postas_migrate:
+    <<: *postas-image
+    restart: 'no'
+    command: sh -c 'python manage.py migrate --noinput && python manage.py collectstatic --noinput'
+    environment: *postas-environment
+    volumes:
+      - postas_static:/app/staticfiles
+    networks:
+      - data
+    depends_on:
+      preprod_validate:
+        condition: service_completed_successfully
+      postas_db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
+  postas_api:
+    <<: *postas-image
+    restart: unless-stopped
+    init: true
+    environment: *postas-environment
+    volumes:
+      - postas_static:/app/staticfiles:ro
+    networks:
+      - backend
+      - data
+    depends_on:
+      postas_migrate:
+        condition: service_completed_successfully
+      postas_platform:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - --fail
+        - --header
+        - 'X-Forwarded-Proto: https'
+        - http://127.0.0.1:8000/readyz/
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+
+  arca_outbox_worker:
+    <<: *postas-image
+    restart: unless-stopped
+    init: true
+    command: python manage.py run_arca_outbox_worker
+    environment: *postas-environment
+    networks:
+      - backend
+      - data
+    depends_on:
+      postas_migrate:
+        condition: service_completed_successfully
+      postas_api:
+        condition: service_healthy
+      postas_platform:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    security_opt:
+      - no-new-privileges:true
+
+  mercado_pago_worker:
+    <<: *postas-image
+    restart: unless-stopped
+    init: true
+    command: python manage.py run_mercado_pago_worker
+    environment: *postas-environment
+    networks:
+      - backend
+      - data
+    depends_on:
+      postas_migrate:
+        condition: service_completed_successfully
+      postas_api:
+        condition: service_healthy
+      postas_platform:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    security_opt:
+      - no-new-privileges:true
+
+  gateway:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      PREPROD_HOST: '${PREPROD_HOST:-localhost}'
+    ports:
+      - '${PREPROD_BIND_ADDRESS:-127.0.0.1}:${PREPROD_HTTPS_PORT:-8443}:8443'
+    volumes:
+      - ./docker/caddy/Caddyfile.preprod:/etc/caddy/Caddyfile:ro
+      - postas_static:/srv/static:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - backend
+    depends_on:
+      postas_api:
+        condition: service_healthy
+      postas_platform:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -qO-
+        - http://127.0.0.1:8080/healthz
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  postas_postgres_data:
+  platform_postgres_data:
+  postas_static:
+  caddy_data:
+  caddy_config:
+
+networks:
+  backend:
+  data:
+    internal: true

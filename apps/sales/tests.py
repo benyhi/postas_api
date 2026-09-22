@@ -1,14 +1,22 @@
 import uuid
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 from unittest.mock import patch
+from types import SimpleNamespace
 
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from rest_framework.test import APIClient
+from rest_framework import serializers as drf_serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.cashbox.models import Cashbox, CashRegister
+from apps.arca.models import FiscalOutboxRequest
 from apps.products.models import Product
 from apps.sales.models import Sale, SaleDetail
+from apps.sales.serializers import SaleCreateSerializer
 from apps.tenants.models import Tenant
 from apps.users.models import User
 
@@ -202,6 +210,70 @@ class SaleEmployeePermissionTests(TestCase):
         self.assertIn(str(self.current_sale.uuid), sale_ids)
         self.assertIn(str(self.closed_cashbox_sale.uuid), sale_ids)
 
+    def test_list_and_detail_query_count_do_not_grow_with_fiscal_requests(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._access_token(self.owner)}")
+        FiscalOutboxRequest.objects.create(
+            tenant_id=self.tenant_id,
+            sale=self.current_sale,
+            created_by=self.owner,
+            environment="test",
+            external_id=f"sale:{self.current_sale.uuid}",
+            payload_snapshot={},
+        )
+        with CaptureQueriesContext(connection) as initial_list_queries:
+            list_response = self.client.get("/api/v1/sales/")
+        with CaptureQueriesContext(connection) as detail_queries:
+            detail_response = self.client.get(f"/api/v1/sales/{self.current_sale.uuid}/")
+
+        for index in range(8):
+            sale = self._create_sale(self.closed_cashbox, Decimal("10.00"))
+            FiscalOutboxRequest.objects.create(
+                tenant_id=self.tenant_id,
+                sale=sale,
+                created_by=self.owner,
+                environment="test",
+                external_id=f"extra:{index}:{sale.uuid}",
+                payload_snapshot={},
+            )
+        with CaptureQueriesContext(connection) as expanded_list_queries:
+            expanded_response = self.client.get("/api/v1/sales/")
+
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.data["invoice_status"], "pending")
+        self.assertEqual(expanded_response.status_code, 200)
+        self.assertEqual(len(expanded_list_queries), len(initial_list_queries))
+        self.assertLessEqual(len(detail_queries), len(initial_list_queries))
+
+    def test_date_filters_use_inclusive_local_day_boundaries(self):
+        target_date = timezone.localdate() - timedelta(days=30)
+        start = timezone.make_aware(datetime.combine(target_date, time.min))
+        inside_end = start + timedelta(days=1) - timedelta(microseconds=1)
+        outside_end = start + timedelta(days=1)
+        sales = [
+            self._create_sale(self.closed_cashbox, Decimal("10.00")),
+            self._create_sale(self.closed_cashbox, Decimal("20.00")),
+            self._create_sale(self.closed_cashbox, Decimal("30.00")),
+        ]
+        for sale, created_at in zip(sales, (start, inside_end, outside_end), strict=True):
+            Sale.objects.filter(pk=sale.pk).update(created_at=created_at)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._access_token(self.owner)}")
+
+        response = self.client.get(
+            f"/api/v1/sales/?from={target_date.isoformat()}&to={target_date.isoformat()}"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        sale_ids = {item["uuid"] for item in response.data["results"]}
+        self.assertEqual(sale_ids, {str(sales[0].uuid), str(sales[1].uuid)})
+
+    def test_sale_query_indexes_are_present(self):
+        with connection.cursor() as cursor:
+            constraints = connection.introspection.get_constraints(cursor, Sale._meta.db_table)
+
+        self.assertIn("sales_tenant_status_date_idx", constraints)
+        self.assertIn("sales_tenant_created_idx", constraints)
+
     def test_sale_from_closed_cashbox_cannot_be_cancelled(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._access_token(self.owner)}")
         initial_stock = self.product.stock
@@ -213,6 +285,41 @@ class SaleEmployeePermissionTests(TestCase):
         self.product.refresh_from_db()
         self.assertEqual(self.closed_cashbox_sale.status, Sale.Status.COMPLETED)
         self.assertEqual(self.product.stock, initial_stock)
+
+    def test_duplicate_lines_cannot_exceed_aggregate_stock(self):
+        self.product.stock = Decimal('1.000')
+        self.product.save(update_fields=['stock'])
+
+        response = self.client.post(
+            '/api/v1/sales/',
+            {
+                'payments': [{'method': Sale.PaymentMethod.CASH, 'amount': '3000.00'}],
+                'items': [
+                    {'product_id': str(self.product.uuid), 'quantity': '1.000'},
+                    {'product_id': str(self.product.uuid), 'quantity': '1.000'},
+                ],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.stock, Decimal('1.000'))
+
+    def test_stock_is_revalidated_after_serializer_validation(self):
+        request = SimpleNamespace(tenant_id=self.tenant_id, user=self.employee)
+        serializer = SaleCreateSerializer(
+            data={
+                'payments': [{'method': Sale.PaymentMethod.CASH, 'amount': '1500.00'}],
+                'items': [{'product_id': str(self.product.uuid), 'quantity': '1.000'}],
+            },
+            context={'request': request},
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        Product.objects.filter(pk=self.product.pk).update(stock=Decimal('0.000'))
+
+        with self.assertRaisesMessage(drf_serializers.ValidationError, 'Insufficient stock'):
+            serializer.save()
 
     def _create_sale(self, cashbox, total, user=None):
         sale = Sale.objects.create(

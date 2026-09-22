@@ -24,6 +24,8 @@ RUN python -m pip install --upgrade pip \
 
 RUN addgroup --system app && adduser --system --ingroup app app
 
+RUN mkdir -p /app/staticfiles && chown app:app /app/staticfiles
+
 COPY --chown=app:app . .
 
 RUN python -m compileall .

@@ -1,8 +1,9 @@
 import json
 import uuid
-from io import BytesIO
-from unittest.mock import patch
-from urllib import error
+from unittest.mock import Mock, patch
+
+import requests
+from django.core.cache import cache
 
 from django.test import SimpleTestCase, TestCase, override_settings
 from rest_framework.test import APIClient
@@ -17,18 +18,15 @@ from .enforcement import (
 )
 
 
-class Response:
-    def __init__(self, body):
-        self.body = body
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-    def read(self):
-        return json.dumps(self.body).encode("utf-8")
+def response_with(body, status_code=200):
+    response = Mock(spec=requests.Response)
+    response.status_code = status_code
+    response.content = json.dumps(body).encode("utf-8") if body is not None else b""
+    response.text = json.dumps(body) if body is not None else ""
+    response.json.return_value = body
+    if status_code >= 400:
+        response.raise_for_status.side_effect = requests.HTTPError(response=response)
+    return response
 
 
 class FakeEnforcementClient:
@@ -36,13 +34,17 @@ class FakeEnforcementClient:
         self.entitlement_response = entitlement_response or {"allowed": True}
         self.entitlement_error = entitlement_error
         self.consume_response = consume_response or {"allowed": True, "recorded": True}
+        self.entitlement_calls = 0
+        self.consume_calls = 0
 
     def check_entitlement(self, *args, **kwargs):
+        self.entitlement_calls += 1
         if self.entitlement_error:
             raise self.entitlement_error
         return self.entitlement_response
 
     def check_and_consume(self, *args, **kwargs):
+        self.consume_calls += 1
         return self.consume_response
 
 
@@ -56,125 +58,84 @@ class FakeEnforcementClient:
 class PlatformBillingClientTests(SimpleTestCase):
     def test_check_entitlement_sends_required_headers_and_payload(self):
         tenant_id = uuid.uuid4()
-        captured = {}
+        session = Mock(spec=requests.Session)
+        session.request.return_value = response_with({"allowed": True})
 
-        def fake_urlopen(req, timeout):
-            captured["url"] = req.full_url
-            captured["method"] = req.get_method()
-            captured["source"] = req.get_header("X-postas-source")
-            captured["token"] = req.get_header("X-postas-service-token")
-            captured["content_type"] = req.get_header("Content-type")
-            captured["timeout"] = timeout
-            captured["payload"] = json.loads(req.data.decode("utf-8"))
-            return Response({"allowed": True})
-
-        with patch("apps.platform_billing.client.request.urlopen", side_effect=fake_urlopen):
-            response = PlatformBillingClient().check_entitlement(
-                tenant_id,
-                "document_extraction",
-                amount=1,
-                resource_count=3,
-                context={"operation": "extract_from_upload"},
-            )
+        response = PlatformBillingClient(session=session).check_entitlement(
+            tenant_id,
+            "document_extraction",
+            amount=1,
+            resource_count=3,
+            context={"operation": "extract_from_upload"},
+        )
 
         self.assertEqual(response, {"allowed": True})
-        self.assertEqual(captured["url"], "http://platform.local/internal/v1/entitlements/check")
-        self.assertEqual(captured["method"], "POST")
-        self.assertEqual(captured["source"], "postas_api")
-        self.assertEqual(captured["token"], "shared-token")
-        self.assertEqual(captured["content_type"], "application/json")
-        self.assertEqual(captured["timeout"], 7)
-        self.assertEqual(captured["payload"]["tenant_id"], str(tenant_id))
-        self.assertEqual(captured["payload"]["feature_key"], "document_extraction")
-        self.assertEqual(captured["payload"]["resource_count"], 3)
+        call = session.request.call_args
+        self.assertEqual(call.args, ("POST", "http://platform.local/internal/v1/entitlements/check"))
+        self.assertEqual(call.kwargs["headers"]["X-Postas-Source"], "postas_api")
+        self.assertEqual(call.kwargs["headers"]["X-Postas-Service-Token"], "shared-token")
+        self.assertEqual(call.kwargs["headers"]["Content-Type"], "application/json")
+        self.assertEqual(call.kwargs["timeout"], 7)
+        self.assertIs(call.kwargs["verify"], True)
+        payload = json.loads(call.kwargs["data"].decode("utf-8"))
+        self.assertEqual(payload["tenant_id"], str(tenant_id))
+        self.assertEqual(payload["feature_key"], "document_extraction")
+        self.assertEqual(payload["resource_count"], 3)
 
     def test_consume_usage_reuses_stable_idempotency_key(self):
         tenant_id = uuid.uuid4()
         external_id = uuid.uuid4()
-        payloads = []
-
-        def fake_urlopen(req, timeout):
-            payloads.append(json.loads(req.data.decode("utf-8")))
-            return Response({"consumed": False, "duplicate": True})
-
-        client = PlatformBillingClient()
-        with patch("apps.platform_billing.client.request.urlopen", side_effect=fake_urlopen):
-            first = client.consume_usage(
-                tenant_id,
-                "document_extraction",
-                external_id=external_id,
-                idempotency_key=f"document-extraction:{external_id}",
-            )
-            second = client.consume_usage(
-                tenant_id,
-                "document_extraction",
-                external_id=external_id,
-                idempotency_key=f"document-extraction:{external_id}",
-            )
+        session = Mock(spec=requests.Session)
+        session.request.return_value = response_with({"consumed": False, "duplicate": True})
+        client = PlatformBillingClient(session=session)
+        first = client.consume_usage(tenant_id, "document_extraction", external_id=external_id, idempotency_key=f"document-extraction:{external_id}")
+        second = client.consume_usage(tenant_id, "document_extraction", external_id=external_id, idempotency_key=f"document-extraction:{external_id}")
 
         self.assertEqual(first, {"consumed": False, "duplicate": True})
         self.assertEqual(second, {"consumed": False, "duplicate": True})
+        payloads = [json.loads(call.kwargs["data"].decode("utf-8")) for call in session.request.call_args_list]
         self.assertEqual(payloads[0]["idempotency_key"], payloads[1]["idempotency_key"])
         self.assertEqual(payloads[0]["external_id"], str(external_id))
+        self.assertIs(client.session, session)
 
     def test_check_and_consume_sends_required_endpoint_context_and_payload(self):
         tenant_id = uuid.uuid4()
         external_id = uuid.uuid4()
-        captured = {}
-
-        def fake_urlopen(req, timeout):
-            captured["url"] = req.full_url
-            captured["payload"] = json.loads(req.data.decode("utf-8"))
-            return Response({"allowed": True, "recorded": True})
-
-        with patch("apps.platform_billing.client.request.urlopen", side_effect=fake_urlopen):
-            response = PlatformBillingClient().check_and_consume(
-                tenant_id,
-                "document_extraction",
-                amount=1,
-                resource_count=2,
-                external_id=external_id,
-                idempotency_key=f"document-extraction:{external_id}",
-                metadata={"provider": "mock"},
-                context={"operation": "consume_after_successful_extraction"},
-            )
-
-        self.assertEqual(response, {"allowed": True, "recorded": True})
-        self.assertEqual(captured["url"], "http://platform.local/internal/v1/usage/check-and-consume")
-        self.assertEqual(captured["payload"]["tenant_id"], str(tenant_id))
-        self.assertEqual(captured["payload"]["feature_key"], "document_extraction")
-        self.assertEqual(captured["payload"]["resource_count"], 2)
-        self.assertEqual(captured["payload"]["external_id"], str(external_id))
-        self.assertEqual(captured["payload"]["metadata"], {"provider": "mock"})
-        self.assertEqual(
-            captured["payload"]["context"],
-            {"operation": "consume_after_successful_extraction"},
+        session = Mock(spec=requests.Session)
+        session.request.return_value = response_with({"allowed": True, "recorded": True})
+        response = PlatformBillingClient(session=session).check_and_consume(
+            tenant_id, "document_extraction", amount=1, resource_count=2,
+            external_id=external_id, idempotency_key=f"document-extraction:{external_id}",
+            metadata={"provider": "mock"}, context={"operation": "consume_after_successful_extraction"},
         )
 
+        self.assertEqual(response, {"allowed": True, "recorded": True})
+        call = session.request.call_args
+        self.assertEqual(call.args[1], "http://platform.local/internal/v1/usage/check-and-consume")
+        payload = json.loads(call.kwargs["data"].decode("utf-8"))
+        self.assertEqual(payload["tenant_id"], str(tenant_id))
+        self.assertEqual(payload["feature_key"], "document_extraction")
+        self.assertEqual(payload["resource_count"], 2)
+        self.assertEqual(payload["external_id"], str(external_id))
+        self.assertEqual(payload["metadata"], {"provider": "mock"})
+        self.assertEqual(payload["context"], {"operation": "consume_after_successful_extraction"})
+
     def test_timeout_raises_controlled_error(self):
-        with patch("apps.platform_billing.client.request.urlopen", side_effect=TimeoutError):
-            with self.assertRaises(PlatformBillingError) as ctx:
-                PlatformBillingClient().get_tenant_status(uuid.uuid4())
+        session = Mock(spec=requests.Session)
+        session.request.side_effect = requests.Timeout("timed out")
+        with self.assertRaises(PlatformBillingError) as ctx:
+            PlatformBillingClient(session=session).get_tenant_status(uuid.uuid4())
 
         self.assertEqual(ctx.exception.status_code, 504)
         self.assertIn("Timeout", ctx.exception.message)
 
     def test_http_error_preserves_status_code_message_and_response_data(self):
-        body = json.dumps({"detail": "Plan suspendido", "code": "subscription_suspended"}).encode("utf-8")
-        http_error = error.HTTPError(
-            "http://platform.local/internal/v1/entitlements/check",
-            402,
-            "Payment Required",
-            hdrs=None,
-            fp=BytesIO(body),
+        session = Mock(spec=requests.Session)
+        session.request.return_value = response_with(
+            {"detail": "Plan suspendido", "code": "subscription_suspended"}, 402,
         )
-
-        with patch("apps.platform_billing.client.request.urlopen", side_effect=http_error):
-            with self.assertRaises(PlatformBillingError) as ctx:
-                PlatformBillingClient().check_entitlement(
-                    uuid.uuid4(),
-                    "document_extraction",
-                )
+        with self.assertRaises(PlatformBillingError) as ctx:
+            PlatformBillingClient(session=session).check_entitlement(uuid.uuid4(), "document_extraction")
 
         self.assertEqual(ctx.exception.status_code, 402)
         self.assertEqual(ctx.exception.message, "Plan suspendido")
@@ -191,8 +152,54 @@ class PlatformBillingClientTests(SimpleTestCase):
         self.assertEqual(ctx.exception.status_code, 503)
         self.assertIn("POSTAS_PLATFORM_SERVICE_TOKEN", ctx.exception.message)
 
+    def test_default_clients_reuse_the_same_pooled_session(self):
+        first = PlatformBillingClient()
+        second = PlatformBillingClient()
+
+        self.assertIs(first.session, second.session)
+
+    def test_connection_error_raises_controlled_error(self):
+        session = Mock(spec=requests.Session)
+        session.request.side_effect = requests.ConnectionError("unreachable")
+
+        with self.assertRaises(PlatformBillingError) as ctx:
+            PlatformBillingClient(session=session).get_tenant_status(uuid.uuid4())
+
+        self.assertEqual(ctx.exception.status_code, 503)
+
+    def test_invalid_json_and_non_object_responses_are_rejected(self):
+        invalid_json = response_with({"allowed": True})
+        invalid_json.content = b"not-json"
+        invalid_json.json.side_effect = requests.exceptions.JSONDecodeError(
+            "invalid", "not-json", 0,
+        )
+        session = Mock(spec=requests.Session)
+        session.request.return_value = invalid_json
+
+        with self.assertRaises(PlatformBillingError) as invalid_ctx:
+            PlatformBillingClient(session=session).get_tenant_status(uuid.uuid4())
+        self.assertEqual(invalid_ctx.exception.status_code, 502)
+
+        session.request.return_value = response_with([{"allowed": True}])
+        with self.assertRaises(PlatformBillingError) as shape_ctx:
+            PlatformBillingClient(session=session).get_tenant_status(uuid.uuid4())
+        self.assertEqual(shape_ctx.exception.status_code, 502)
+
+    @override_settings(POSTAS_PLATFORM_REQUIRE_TLS=True)
+    def test_tls_requirement_is_preserved(self):
+        session = Mock(spec=requests.Session)
+
+        with self.assertRaises(PlatformBillingError) as ctx:
+            PlatformBillingClient(session=session).get_tenant_status(uuid.uuid4())
+
+        self.assertEqual(ctx.exception.status_code, 503)
+        session.request.assert_not_called()
+
 
 class BillingEnforcementTests(SimpleTestCase):
+    def setUp(self):
+        cache.clear()
+
     def test_subscription_denial_maps_to_stable_402_payload(self):
         client = FakeEnforcementClient(
             entitlement_response={
@@ -261,6 +268,134 @@ class BillingEnforcementTests(SimpleTestCase):
 
         self.assertEqual(ctx.exception.status_code, 503)
         self.assertEqual(ctx.exception.payload["code"], "billing_service_unavailable")
+
+    def test_cache_hit_is_separated_by_tenant_and_feature(self):
+        first_tenant = uuid.uuid4()
+        second_tenant = uuid.uuid4()
+        client = FakeEnforcementClient(entitlement_response={"allowed": True})
+
+        check_billing_entitlement(first_tenant, "basic_reports", client=client)
+        check_billing_entitlement(first_tenant, "basic_reports", client=client)
+        check_billing_entitlement(first_tenant, "advanced_reports", client=client)
+        check_billing_entitlement(second_tenant, "basic_reports", client=client)
+
+        self.assertEqual(client.entitlement_calls, 3)
+
+    @override_settings(
+        BILLING_ENTITLEMENT_ALLOW_TTL_SECONDS=61,
+        BILLING_ENTITLEMENT_DENY_TTL_SECONDS=21,
+    )
+    def test_allowed_and_denied_responses_use_distinct_ttls(self):
+        with patch("apps.platform_billing.enforcement.cache.set") as cache_set:
+            check_billing_entitlement(
+                uuid.uuid4(), "basic_reports",
+                client=FakeEnforcementClient(entitlement_response={"allowed": True}),
+            )
+            with self.assertRaises(BillingEnforcementError):
+                check_billing_entitlement(
+                    uuid.uuid4(), "advanced_reports",
+                    client=FakeEnforcementClient(
+                        entitlement_response={"allowed": False, "reason": "feature_not_enabled"}
+                    ),
+                )
+
+        self.assertEqual(cache_set.call_args_list[0].kwargs["timeout"], 61)
+        self.assertEqual(cache_set.call_args_list[1].kwargs["timeout"], 21)
+
+    def test_context_is_not_part_of_cache_key(self):
+        tenant_id = uuid.uuid4()
+        client = FakeEnforcementClient(entitlement_response={"allowed": True})
+
+        check_billing_entitlement(
+            tenant_id, "basic_reports", context={"operation": "daily"}, client=client,
+        )
+        check_billing_entitlement(
+            tenant_id, "basic_reports", context={"operation": "cashbox"}, client=client,
+        )
+
+        self.assertEqual(client.entitlement_calls, 1)
+
+    def test_invalid_and_platform_error_responses_are_not_cached(self):
+        tenant_id = uuid.uuid4()
+        invalid_client = FakeEnforcementClient(entitlement_response={"allowed": "yes"})
+        for _ in range(2):
+            with self.assertRaises(BillingEnforcementError):
+                check_billing_entitlement(tenant_id, "basic_reports", client=invalid_client)
+        self.assertEqual(invalid_client.entitlement_calls, 2)
+
+        error_client = FakeEnforcementClient(
+            entitlement_error=PlatformBillingError("Timeout", status_code=504)
+        )
+        for _ in range(2):
+            with self.assertRaises(BillingEnforcementError):
+                check_billing_entitlement(tenant_id, "advanced_reports", client=error_client)
+        self.assertEqual(error_client.entitlement_calls, 2)
+
+    def test_cache_failure_falls_back_to_platform(self):
+        client = FakeEnforcementClient(entitlement_response={"allowed": True})
+        with (
+            patch("apps.platform_billing.enforcement.cache.get", side_effect=RuntimeError("redis down")),
+            patch("apps.platform_billing.enforcement.cache.set", side_effect=RuntimeError("redis down")),
+        ):
+            response = check_billing_entitlement(
+                uuid.uuid4(), "basic_reports", client=client,
+            )
+
+        self.assertTrue(response["allowed"])
+        self.assertEqual(client.entitlement_calls, 1)
+
+    def test_cache_and_platform_failure_remains_fail_closed(self):
+        client = FakeEnforcementClient(
+            entitlement_error=PlatformBillingError("Timeout", status_code=504)
+        )
+        with patch(
+            "apps.platform_billing.enforcement.cache.get",
+            side_effect=RuntimeError("redis down"),
+        ):
+            with self.assertRaises(BillingEnforcementError) as ctx:
+                check_billing_entitlement(
+                    uuid.uuid4(), "basic_reports", client=client,
+                )
+
+        self.assertEqual(ctx.exception.status_code, 503)
+        self.assertEqual(ctx.exception.payload["code"], "billing_service_unavailable")
+
+    def test_resource_limits_and_consumption_are_never_cached(self):
+        tenant_id = uuid.uuid4()
+        entitlement_client = FakeEnforcementClient(entitlement_response={"allowed": True})
+        check_billing_entitlement(
+            tenant_id, "basic_reports", resource_count=1, client=entitlement_client,
+        )
+        check_billing_entitlement(
+            tenant_id, "basic_reports", resource_count=1, client=entitlement_client,
+        )
+        self.assertEqual(entitlement_client.entitlement_calls, 2)
+
+        consume_client = FakeEnforcementClient()
+        check_and_consume_billing_usage(
+            tenant_id, "basic_reports", idempotency_key="usage:1", client=consume_client,
+        )
+        check_and_consume_billing_usage(
+            tenant_id, "basic_reports", idempotency_key="usage:1", client=consume_client,
+        )
+        self.assertEqual(consume_client.consume_calls, 2)
+
+    def test_monthly_limit_denials_are_never_cached(self):
+        tenant_id = uuid.uuid4()
+        client = FakeEnforcementClient(
+            entitlement_response={
+                "allowed": False,
+                "reason": "quota_exceeded",
+                "limit": 10,
+                "used": 10,
+            }
+        )
+
+        for _ in range(2):
+            with self.assertRaises(BillingEnforcementError):
+                check_billing_entitlement(tenant_id, "basic_reports", client=client)
+
+        self.assertEqual(client.entitlement_calls, 2)
 
 
 class CurrentTenantBillingStatusEndpointTests(TestCase):

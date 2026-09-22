@@ -21,6 +21,7 @@ from apps.mercado_pago.services import (
     stable_operation_key,
 )
 from apps.sales.models import Sale, SaleDetail
+from apps.sales.querysets import filter_by_local_dates
 from apps.sales.serializers import SaleCreateSerializer, SaleReadSerializer
 from apps.cashbox.models import Cashbox
 from apps.tenants.models import Tenant
@@ -63,7 +64,11 @@ class SaleListCreateView(generics.ListCreateAPIView):
         if getattr(self, "swagger_fake_view", False):
             return Sale.objects.none()
         qs = Sale.objects.filter(tenant_id=self.request.tenant_id).select_related(
-            "user", "cashbox", "cashbox__register", "mercado_pago_order",
+            "user",
+            "cashbox",
+            "cashbox__register",
+            "fiscal_request",
+            "mercado_pago_order",
         ).prefetch_related("details__product")
 
         if self.request.user.role == "EMPLOYEE":
@@ -102,12 +107,13 @@ class SaleListCreateView(generics.ListCreateAPIView):
             qs = qs.filter(total__lte=max_total)
 
         date_from = self.request.query_params.get("from")
-        if date_from:
-            qs = qs.filter(created_at__date__gte=date_from)
-
         date_to = self.request.query_params.get("to")
-        if date_to:
-            qs = qs.filter(created_at__date__lte=date_to)
+        qs = filter_by_local_dates(
+            qs,
+            field_name="created_at",
+            date_from=serializers.DateField().run_validation(date_from) if date_from else None,
+            date_to=serializers.DateField().run_validation(date_to) if date_to else None,
+        )
 
         return qs
 
@@ -235,7 +241,11 @@ class SaleDetailView(generics.RetrieveAPIView):
         qs = Sale.objects.filter(
             tenant_id=self.request.tenant_id,
         ).select_related(
-            "user", "cashbox", "cashbox__register", "mercado_pago_order",
+            "user",
+            "cashbox",
+            "cashbox__register",
+            "fiscal_request",
+            "mercado_pago_order",
         ).prefetch_related("details__product")
         if self.request.user.role == "EMPLOYEE":
             qs = qs.filter(cashbox__status="OPEN", cashbox__opened_by=self.request.user)

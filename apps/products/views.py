@@ -22,6 +22,28 @@ from core.permissions.roles import IsAdminOrOwner, IsAdminOrOwnerOrReadOnly
 from core.utils.audit import log_action
 
 
+def _spreadsheet_safe(value):
+    text = '' if value is None else str(value)
+    normalized = text.lstrip(' \t\r\n')
+    if normalized.startswith(('=', '+', '-', '@')):
+        return chr(39) + text
+    return text
+
+
+class _ProductCSVWriter:
+    text_columns = {0, 1, 4, 7, 8, 9}
+
+    def __init__(self, writer):
+        self.writer = writer
+
+    def writerow(self, row):
+        safe_row = [
+            _spreadsheet_safe(value) if index in self.text_columns else value
+            for index, value in enumerate(row)
+        ]
+        return self.writer.writerow(safe_row)
+
+
 class ProductPagination(PageNumberPagination):
     page_size = 20
     page_size_query_param = "page_size"
@@ -278,7 +300,7 @@ class ProductExportView(APIView):
         response["Content-Disposition"] = 'attachment; filename="inventario.csv"'
         response.write("﻿")  # BOM for Excel UTF-8 compatibility
 
-        writer = csv.writer(response)
+        writer = _ProductCSVWriter(csv.writer(response))
         writer.writerow([
             "nombre", "descripcion", "precio", "costo",
             "unidad", "stock", "stock_minimo",

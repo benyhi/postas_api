@@ -13,6 +13,11 @@ jobs:
       - name: Descargar codigo
         uses: actions/checkout@v4
 
+      - name: Validar Docker Compose de preproduccion
+        env:
+          POSTAS_PLATFORM_PATH: .
+        run: docker compose --env-file preprod.env.example -f docker-compose.preprod.yml config --quiet
+
       - name: Login en Docker Hub
         uses: docker/login-action@v4
         with:

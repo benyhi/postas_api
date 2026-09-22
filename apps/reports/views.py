@@ -12,6 +12,7 @@ from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExampl
 
 from apps.platform_billing.enforcement import check_billing_entitlement
 from apps.sales.models import Sale, SaleDetail
+from apps.sales.querysets import filter_by_local_dates
 from apps.cashbox.models import Cashbox
 from core.permissions.roles import IsAdminOrOwner
 
@@ -29,21 +30,27 @@ def _build_payment_breakdown(sales_qs):
     Build payment method breakdown distributing MIXED sales
     to their individual component methods.
     """
-    breakdown = {}
-    for sale in sales_qs:
-        if sale.payment_method == "MIXED":
-            for p in (sale.payments or []):
-                method = p.get("method", "")
-                amount = Decimal(str(p.get("amount", 0)))
-                if method not in breakdown:
-                    breakdown[method] = {"total": Decimal(0), "count": 0}
-                breakdown[method]["total"] += amount
-                breakdown[method]["count"] += 1
-        else:
-            method = sale.payment_method
+    breakdown = {
+        row["payment_method"]: {"total": row["total"], "count": row["count"]}
+        for row in (
+            sales_qs.exclude(payment_method=Sale.PaymentMethod.MIXED)
+            .order_by()
+            .values("payment_method")
+            .annotate(total=Sum("total"), count=Count("uuid"))
+        )
+    }
+    mixed_payments = (
+        sales_qs.filter(payment_method=Sale.PaymentMethod.MIXED)
+        .order_by()
+        .values_list("payments", flat=True)
+    )
+    for payments in mixed_payments:
+        for payment in payments or []:
+            method = payment.get("method", "")
+            amount = Decimal(str(payment.get("amount", 0)))
             if method not in breakdown:
                 breakdown[method] = {"total": Decimal(0), "count": 0}
-            breakdown[method]["total"] += sale.total
+            breakdown[method]["total"] += amount
             breakdown[method]["count"] += 1
     return [
         {"payment_method": k, "total": str(v["total"]), "count": v["count"]}
@@ -51,7 +58,7 @@ def _build_payment_breakdown(sales_qs):
     ]
 
 _date_params = [
-    OpenApiParameter(name="from", description="Fecha desde (YYYY-MM-DD). Por defecto: hoy.", type=str, required=False),
+    OpenApiParameter(name="from", description="Fecha desde (YYYY-MM-DD)", type=str, required=False),
     OpenApiParameter(name="to", description="Fecha hasta (YYYY-MM-DD)", type=str, required=False),
 ]
 _scope_params = [
@@ -97,16 +104,11 @@ class DailySalesReportView(APIView):
         )
         qs = _filter_sale_scope(qs, request)
 
-        date_from = request.query_params.get("from")
-        date_to = request.query_params.get("to")
-
-        if date_from:
-            qs = qs.filter(created_at__date__gte=date_from)
-        else:
-            qs = qs.filter(created_at__date=timezone.now().date())
-
-        if date_to:
-            qs = qs.filter(created_at__date__lte=date_to)
+        date_from = _date_query_param(request, "from") or timezone.localdate()
+        date_to = _date_query_param(request, "to")
+        qs = filter_by_local_dates(
+            qs, field_name="created_at", date_from=date_from, date_to=date_to,
+        )
 
         stats = qs.aggregate(
             total_sold=Sum("total"),
@@ -126,7 +128,7 @@ class SalesByPaymentReportView(APIView):
 
     @extend_schema(
         summary="Ventas por metodo de pago",
-        description="Desglose de ventas agrupadas por metodo de pago. Filtra por rango de fechas.",
+        description="Desglose de ventas agrupadas por metodo de pago. Filtra por rango de fechas. Sin fechas, muestra solo hoy.",
         tags=["Reports"],
         parameters=_date_params + _scope_params,
         responses={200: inline_serializer("SalesByPaymentReport", fields={
@@ -146,12 +148,13 @@ class SalesByPaymentReportView(APIView):
         )
         qs = _filter_sale_scope(qs, request)
 
-        date_from = request.query_params.get("from")
-        date_to = request.query_params.get("to")
-        if date_from:
-            qs = qs.filter(created_at__date__gte=date_from)
-        if date_to:
-            qs = qs.filter(created_at__date__lte=date_to)
+        date_from = _date_query_param(request, "from")
+        date_to = _date_query_param(request, "to")
+        if date_from is None and date_to is None:
+            date_from = date_to = timezone.localdate()
+        qs = filter_by_local_dates(
+            qs, field_name="created_at", date_from=date_from, date_to=date_to,
+        )
 
         return Response(_build_payment_breakdown(qs))
 
@@ -186,12 +189,12 @@ class TopProductsReportView(APIView):
         )
         qs = _filter_sale_scope(qs, request, prefix="sale__")
 
-        date_from = request.query_params.get("from")
-        date_to = request.query_params.get("to")
-        if date_from:
-            qs = qs.filter(sale__created_at__date__gte=date_from)
-        if date_to:
-            qs = qs.filter(sale__created_at__date__lte=date_to)
+        qs = filter_by_local_dates(
+            qs,
+            field_name="sale__created_at",
+            date_from=_date_query_param(request, "from"),
+            date_to=_date_query_param(request, "to"),
+        )
 
         top = qs.values(
             "product__uuid", "product__name",
@@ -237,14 +240,14 @@ class CashboxSummaryReportView(APIView):
         if cashbox_id:
             cashbox_id = serializers.UUIDField().run_validation(cashbox_id)
             try:
-                cashbox = Cashbox.objects.get(
+                cashbox = Cashbox.objects.select_related("register").get(
                     uuid=cashbox_id, tenant_id=request.tenant_id,
                 )
             except Cashbox.DoesNotExist:
                 return Response({"detail": "Cashbox not found."}, status=404)
         else:
             # Default: current open cashbox
-            cashbox = Cashbox.objects.filter(
+            cashbox = Cashbox.objects.select_related("register").filter(
                 tenant_id=request.tenant_id,
                 opened_by=request.user,
                 status=Cashbox.Status.OPEN,
@@ -326,10 +329,11 @@ class SalesByDateView(APIView):
         qs = Sale.objects.filter(
             tenant_id=request.tenant_id,
             status=Sale.Status.COMPLETED,
-            created_at__date__gte=date_from,
-            created_at__date__lte=date_to,
         )
         qs = _filter_sale_scope(qs, request)
+        qs = filter_by_local_dates(
+            qs, field_name="created_at", date_from=date_from, date_to=date_to,
+        )
 
         by_date = (
             qs.annotate(day=TruncDate("created_at"))
@@ -353,3 +357,8 @@ class SalesByDateView(APIView):
             current += timedelta(days=1)
 
         return Response(result)
+
+
+def _date_query_param(request, name):
+    value = request.query_params.get(name)
+    return serializers.DateField().run_validation(value) if value else None

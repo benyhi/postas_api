@@ -16,6 +16,15 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   api:
     build:
       context: .
@@ -32,6 +41,8 @@ services:
       - .env
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-postas_user}:${POSTGRES_PASSWORD:-postas_pass}@db:5432/${POSTGRES_DB:-postas_db}
+      CACHE_URL: redis://redis:6379/1
+      CACHE_KEY_PREFIX: ${CACHE_KEY_PREFIX:-postas:development}
       POSTAS_PLATFORM_API_URL: http://postas_platform:8001
       POSTAS_PLATFORM_SERVICE_TOKEN: ${POSTAS_PLATFORM_SERVICE_TOKEN:-local-service-token}
       POSTAS_PLATFORM_SOURCE: ${POSTAS_PLATFORM_SOURCE:-postas_api}
@@ -48,6 +59,8 @@ services:
       AI_EXTRACTOR_SOURCE: ${AI_EXTRACTOR_SOURCE:-postas_api}
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       postas_platform:
         condition: service_healthy

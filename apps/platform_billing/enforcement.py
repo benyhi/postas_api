@@ -1,6 +1,9 @@
 import logging
+import threading
 from typing import Any
 
+from django.conf import settings
+from django.core.cache import cache
 from rest_framework import status
 from rest_framework.exceptions import APIException
 
@@ -20,7 +23,13 @@ SUBSCRIPTION_PAYMENT_CODES = {
 FEATURE_DENIED_CODES = {"feature_not_enabled"}
 LIMIT_DENIED_CODES = {"quota_exceeded", "resource_limit_exceeded"}
 BUSINESS_DENIED_CODES = SUBSCRIPTION_PAYMENT_CODES | FEATURE_DENIED_CODES | LIMIT_DENIED_CODES
+CACHEABLE_DENIED_CODES = SUBSCRIPTION_PAYMENT_CODES | FEATURE_DENIED_CODES
 PLATFORM_UNAVAILABLE_CODE = "billing_service_unavailable"
+CACHEABLE_ENTITLEMENT_FEATURES = frozenset({"basic_reports", "advanced_reports"})
+
+_default_client = None
+_default_client_factory = None
+_default_client_lock = threading.Lock()
 
 
 class BillingEnforcementError(APIException):
@@ -118,7 +127,18 @@ def check_billing_entitlement(
     context: dict[str, Any] | None = None,
     client: PlatformBillingClient | None = None,
 ) -> dict[str, Any]:
-    billing_client = client or PlatformBillingClient()
+    cacheable = (
+        feature_key in CACHEABLE_ENTITLEMENT_FEATURES
+        and amount == 1
+        and resource_count is None
+    )
+    cache_key = _entitlement_cache_key(tenant_id, feature_key)
+    if cacheable:
+        cached_response = _cache_get(cache_key)
+        if cached_response is not None:
+            return _assert_allowed_response(cached_response, feature_key)
+
+    billing_client = client or _get_default_client()
     try:
         response = billing_client.check_entitlement(
             tenant_id,
@@ -130,6 +150,13 @@ def check_billing_entitlement(
     except PlatformBillingError as exc:
         raise _platform_unavailable(feature_key, exc) from exc
 
+    if cacheable and _is_cacheable_response(response):
+        timeout = (
+            settings.BILLING_ENTITLEMENT_ALLOW_TTL_SECONDS
+            if response.get("allowed") is True
+            else settings.BILLING_ENTITLEMENT_DENY_TTL_SECONDS
+        )
+        _cache_set(cache_key, response, timeout)
     return _assert_allowed_response(response, feature_key)
 
 
@@ -146,7 +173,7 @@ def check_and_consume_billing_usage(
     context: dict[str, Any] | None = None,
     client: PlatformBillingClient | None = None,
 ) -> dict[str, Any]:
-    billing_client = client or PlatformBillingClient()
+    billing_client = client or _get_default_client()
     try:
         response = billing_client.check_and_consume(
             tenant_id,
@@ -216,11 +243,10 @@ def _platform_unavailable(
     detail: str = "No se pudo validar el plan del tenant.",
 ) -> BillingEnforcementError:
     logger.warning(
-        "Platform billing enforcement failed: feature=%s status=%s detail=%s response=%s",
+        "Platform billing enforcement failed: feature=%s status=%s error_type=%s",
         feature_key,
         exc.status_code,
-        exc.message,
-        exc.response_data,
+        type(exc).__name__,
     )
     return BillingEnforcementError(
         _stable_payload(
@@ -348,3 +374,41 @@ def _is_duplicate_usage_response(data: dict[str, Any]) -> bool:
         or ("already" in detail and "consum" in detail)
         or ("already" in detail and "record" in detail)
     )
+
+
+def _get_default_client() -> PlatformBillingClient:
+    global _default_client, _default_client_factory
+    if _default_client is None or _default_client_factory is not PlatformBillingClient:
+        with _default_client_lock:
+            if _default_client is None or _default_client_factory is not PlatformBillingClient:
+                _default_client = PlatformBillingClient()
+                _default_client_factory = PlatformBillingClient
+    return _default_client
+
+
+def _entitlement_cache_key(tenant_id, feature_key: str) -> str:
+    return f"billing:entitlement:v1:{tenant_id}:{feature_key}"
+
+
+def _is_cacheable_response(response: dict[str, Any]) -> bool:
+    if not isinstance(response, dict):
+        return False
+    if response.get("allowed") is True:
+        return True
+    return response.get("allowed") is False and _response_code(response) in CACHEABLE_DENIED_CODES
+
+
+def _cache_get(key: str):
+    try:
+        value = cache.get(key)
+    except Exception as exc:
+        logger.warning("Billing entitlement cache read failed: %s", type(exc).__name__)
+        return None
+    return value if _is_cacheable_response(value) else None
+
+
+def _cache_set(key: str, value: dict[str, Any], timeout: int) -> None:
+    try:
+        cache.set(key, value, timeout=timeout)
+    except Exception as exc:
+        logger.warning("Billing entitlement cache write failed: %s", type(exc).__name__)
