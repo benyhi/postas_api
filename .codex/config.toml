@@ -2,6 +2,10 @@
 type = "http"
 url = "https://resend.com/docs/mcp"
 
+[mcp_servers.mercadopago]
+type = "http"
+url = "https://mcp.mercadopago.com/mcp"
+
 [agents]
 max_threads=4
 max_depth=1
