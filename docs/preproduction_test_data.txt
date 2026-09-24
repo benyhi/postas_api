@@ -1,0 +1,76 @@
+Feature:
+Frontend Railway variables and idempotent preproduction test data
+
+Classification:
+large
+
+Context reviewed:
+- postas-front runtime API proxy and Dockerfile
+- Django tenant, user, product and cash-register models
+- Platform billing catalog, subscription and payment models
+
+Current behavior:
+The frontend requires API_PROXY_TARGET and optionally injects TENANT_ID into JSON requests.
+The previous Django test seed generated random historical sales, assumed users already existed
+and was not suitable for repeated Railway runs. Platform had no targeted subscription seed for
+the same tenant used by the frontend.
+
+Proposed behavior:
+Use one stable preproduction tenant UUID across frontend, Django and Platform. Create deterministic
+minimal catalog data and users in Django, and assign the same tenant an active billing plan in
+Platform. Both commands are safe to rerun.
+
+Implementation plan:
+1. Configure frontend runtime variables against the Railway private API domain.
+2. Run Platform billing catalog and targeted tenant subscription seed.
+3. Run Django seed_preprod with three explicit, independent secret passwords.
+4. Remove the temporary password variables after validating login if repeatability is not needed.
+
+Files changed:
+- apps/users/management/commands/seed_preprod.py
+- apps/users/test_seed_preprod.py
+- scripts/seed_preprod_tenant.py in postas_platform_api
+- tests/test_billing.py in postas_platform_api
+- postas-front/.env.example and README.md
+
+Tests created or updated:
+- Django command idempotency and password requirement
+- Platform subscription/payment idempotency
+
+Documentation updated:
+- postas-front/README.md
+- this file
+
+Checks run:
+- Django seed tests and apps.users suite
+- Django migration drift check
+- Platform billing suite
+- Frontend production build
+- Frontend lint (blocked by one preexisting error in reportes/page.js)
+
+Risks:
+- The tenant UUID must be identical in all three services.
+- Test credentials must never be reused in production.
+- Django applies its data in one transaction. Platform seeds the billing catalog before applying
+  the tenant records, so the two services are not cross-database atomic.
+
+Important notes:
+- Run these commands through Railway SSH after migrations.
+- Do not add either seed command to every deployment.
+- The seed does not configure real ARCA certificates or Mercado Pago OAuth credentials.
+- A normal rerun only accepts records previously recognized as belonging to these seeds. The
+  --force-existing option can overwrite existing tenant or subscription data and must only be
+  used after verifying the target UUID.
+
+Railway variables:
+- Frontend: API_PROXY_TARGET and TENANT_ID.
+- Django: PREPROD_OWNER_PASSWORD, PREPROD_ADMIN_PASSWORD and PREPROD_CASHIER_PASSWORD.
+- Platform seed defaults: PREPROD_TENANT_ID, PREPROD_PLAN_CODE and
+  PREPROD_SUBSCRIPTION_DAYS are optional because the safe preproduction defaults are built in.
+
+Execution order (replace service names if they differ in Railway):
+1. railway ssh -s postas-platform -- python scripts/seed_preprod_tenant.py
+2. railway ssh -s postas-api -- python manage.py seed_preprod
+
+Expected tenant UUID:
+00000000-0000-0000-0000-000000000001
