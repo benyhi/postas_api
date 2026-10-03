@@ -1,0 +1,20 @@
+FROM python:3.14-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY postas_api/requirements.txt /tmp/postas-requirements.txt
+RUN python -m pip install -r /tmp/postas-requirements.txt
+
+COPY postas_api /app/postas_api
+COPY postas_platform_api /app/postas_platform_api
+WORKDIR /app/postas_api
+ENV PYTHONPATH=/app/postas_api
+
+# The seed is run explicitly over SSH after preflight.
+CMD ["sleep", "infinity"]

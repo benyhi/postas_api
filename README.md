@@ -976,6 +976,14 @@ idempotencia en [docs/mercado_pago_point_qr.txt](docs/mercado_pago_point_qr.txt)
 - Tamaño máximo por defecto: **5 MB**.
 
 ---
+## Dataset de demostración
+
+`scripts/seed_demo.py` coordina la carga reproducible de Postas y Platform: ocho
+comercios por plan, catálogo de 100 productos en español con imágenes copiadas a
+R2, historial anual, cajas, usuarios, proveedores, suscripciones y pagos simulados.
+Respeta los límites de cada plan y permite prevalidación sin escrituras con
+`--dry-run`. Ver [configuración, comandos y recuperación](docs/seed_demo.md).
+
 ## Hardening de seguridad
 
 - `SECRET_KEY` es obligatoria; la aplicacion no inicia si falta.

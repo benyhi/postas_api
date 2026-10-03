@@ -1,4 +1,5 @@
 env/
+.demo-seed/
 __pycache__/
 *.pyc
 *.pyo
