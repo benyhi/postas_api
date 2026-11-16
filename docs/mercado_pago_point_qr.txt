@@ -94,10 +94,15 @@ Todos estos endpoints son OWNER-only y tenant-scoped.
 Creacion de ventas
 ------------------
 
-POST /api/v1/sales/ mantiene 201 para ventas locales. Una venta con POINT o QR
-requiere X-Idempotency-Key (1..160 caracteres) y devuelve 202. Se admite una
-sola linea externa, sola o combinada con una linea local distinta. La suma de
-las lineas debe coincidir exactamente con el total revalidado.
+POST /api/v1/sales/ mantiene 201 para ventas locales. Una venta con POINT o QR,
+y una venta que incluya CARD cuando la caja tiene terminal Point,
+requiere X-Idempotency-Key (1..160 caracteres) y devuelve 202. Si hay una
+terminal Point asociada, QR se envia a esa terminal con el medio limitado a QR;
+si no, QR conserva el flujo dinamico por POS asociado. CARD usa Point sin
+restringir el medio para permitir debito o credito y se guarda usando el medio
+que confirme la orden canonica. El efectivo o una transferencia pueden
+combinarse con una linea externa; solo esa linea se cobra en el dispositivo.
+La suma de las lineas debe coincidir exactamente con el total revalidado.
 
 Ejemplo Point:
 

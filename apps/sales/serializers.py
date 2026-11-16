@@ -68,9 +68,15 @@ class SaleCreateSerializer(serializers.Serializer):
         if len(methods) != len(set(methods)):
             raise serializers.ValidationError("No se pueden repetir métodos de pago.")
 
+        register = cashbox.register
         external_payments = [
             payment for payment in payments
             if payment["method"] in (Sale.PaymentMethod.POINT, Sale.PaymentMethod.QR)
+            or (
+                payment["method"] == Sale.PaymentMethod.CARD
+                and register is not None
+                and bool(register.mercado_pago_terminal_id)
+            )
         ]
         if len(external_payments) > 1:
             raise serializers.ValidationError("Only one POINT or QR payment line is allowed.")
@@ -91,7 +97,18 @@ class SaleCreateSerializer(serializers.Serializer):
             )
 
         attrs["computed_total"] = computed_total
-        attrs["external_payment"] = external_payments[0] if external_payments else None
+        external_payment = external_payments[0] if external_payments else None
+        if external_payment:
+            method = external_payment["method"]
+            if method == Sale.PaymentMethod.POINT:
+                external_payment["route"] = "POINT"
+            elif method == Sale.PaymentMethod.QR and register and register.mercado_pago_terminal_id:
+                external_payment["route"] = "POINT_QR"
+            elif method == Sale.PaymentMethod.QR:
+                external_payment["route"] = "QR"
+            else:
+                external_payment["route"] = "POINT"
+        attrs["external_payment"] = external_payment
         return attrs
 
     @transaction.atomic

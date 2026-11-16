@@ -25,7 +25,7 @@ from apps.sales.querysets import filter_by_local_dates
 from apps.sales.serializers import SaleCreateSerializer, SaleReadSerializer
 from apps.cashbox.models import Cashbox
 from apps.tenants.models import Tenant
-from core.permissions.roles import IsAdminOrOwner
+from core.permissions.roles import IsAdminOrOwner, IsEmployee
 from core.utils.audit import log_action
 
 
@@ -145,13 +145,7 @@ class SaleListCreateView(generics.ListCreateAPIView):
     )
     def create(self, request, *args, **kwargs):
         idempotency_key = request.headers.get("X-Idempotency-Key", "").strip()
-        has_external_payment = any(
-            isinstance(payment, dict) and payment.get("method") in {
-                Sale.PaymentMethod.POINT, Sale.PaymentMethod.QR,
-            }
-            for payment in (request.data.get("payments", []) if isinstance(request.data, dict) else [])
-        )
-        if has_external_payment and idempotency_key:
+        if idempotency_key:
             existing = MercadoPagoOrder.objects.select_related(
                 "sale__user", "sale__cashbox__register",
             ).filter(
@@ -253,11 +247,20 @@ class SaleDetailView(generics.RetrieveAPIView):
 
 
 class SaleCancelView(APIView):
-    permission_classes = [IsAdminOrOwner]
+    permission_classes = []
+
+    def get_permissions(self):
+        if getattr(self.request.user, "role", None) == "EMPLOYEE":
+            return [IsEmployee()]
+        return [IsAdminOrOwner()]
 
     @extend_schema(
         summary="Cancelar venta",
-        description="Cancela una venta y revierte el stock de los productos. Solo ADMIN u OWNER.",
+        description=(
+            "ADMIN/OWNER pueden cancelar ventas. EMPLOYEE puede cancelar solo su propio "
+            "cobro externo pendiente en la caja abierta; no puede cancelar ventas locales "
+            "ni solicitar reembolsos."
+        ),
         tags=["Sales"],
         request=None,
         responses={200: SaleReadSerializer},
@@ -267,7 +270,16 @@ class SaleCancelView(APIView):
             tenant_id=request.tenant_id, sale_id=uuid,
         ).select_related("sale__cashbox").first()
         if external:
+            if request.user.role == "EMPLOYEE" and (
+                external.sale.status != Sale.Status.PENDING
+                or external.sale.user_id != request.user.pk
+                or external.sale.cashbox.status != Cashbox.Status.OPEN
+                or external.sale.cashbox.opened_by_id != request.user.pk
+            ):
+                return Response({"detail": "Sale not found."}, status=status.HTTP_404_NOT_FOUND)
             return self._cancel_external(request, external)
+        if request.user.role == "EMPLOYEE":
+            return Response({"detail": "Sale not found."}, status=status.HTTP_404_NOT_FOUND)
         with transaction.atomic():
             Tenant.objects.select_for_update().get(uuid=request.tenant_id)
             try:
@@ -329,6 +341,13 @@ class SaleCancelView(APIView):
                 uuid=order.sale_id, tenant_id=request.tenant_id,
             )
             order = MercadoPagoOrder.objects.select_for_update().get(uuid=order.uuid)
+            if request.user.role == "EMPLOYEE" and (
+                sale.status != Sale.Status.PENDING
+                or sale.user_id != request.user.pk
+                or cashbox.status != Cashbox.Status.OPEN
+                or cashbox.opened_by_id != request.user.pk
+            ):
+                return Response({"detail": "Sale not found."}, status=status.HTTP_404_NOT_FOUND)
             if cashbox.status == Cashbox.Status.CLOSED:
                 return Response(
                     {"detail": "Sales from a closed cashbox cannot be cancelled."},
@@ -392,7 +411,11 @@ class SaleCancelView(APIView):
             if operation == "cancel" and exc.status_code == status.HTTP_409_CONFLICT:
                 detail = exc.response_data.get("detail")
                 nested = detail if isinstance(detail, dict) else {}
-                MercadoPagoOrder.objects.filter(uuid=order.uuid).update(
+                MercadoPagoOrder.objects.filter(
+                    uuid=order.uuid,
+                    state=MercadoPagoOrder.State.CANCEL_REQUESTED,
+                    sale__status=Sale.Status.PENDING,
+                ).update(
                     state=MercadoPagoOrder.State.ACTION_REQUIRED,
                     next_retry_at=timezone.now(),
                 )

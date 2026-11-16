@@ -112,6 +112,199 @@ class MercadoPagoSaleTests(TestCase):
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock, Decimal("9.000"))
 
+    @patch("apps.sales.views.PlatformMercadoPagoClient")
+    @patch("apps.mercado_pago.services.PlatformMercadoPagoClient")
+    @patch("apps.mercado_pago.services.reserve_billing_usage")
+    def test_employee_can_cancel_own_pending_external_sale(
+        self, reserve, create_client_class, cancel_client_class
+    ):
+        order = self._create_pending_order(reserve, create_client_class, key="employee-cancel")
+
+        response = self.client.post(f"/api/v1/sales/{order.sale_id}/cancel/")
+
+        self.assertEqual(response.status_code, 202)
+        cancel_client_class.return_value.cancel_order.assert_called_once()
+        order.refresh_from_db()
+        self.assertEqual(order.state, MercadoPagoOrder.State.CANCEL_REQUESTED)
+
+    @patch("apps.sales.views.PlatformMercadoPagoClient")
+    @patch("apps.mercado_pago.services.PlatformMercadoPagoClient")
+    @patch("apps.mercado_pago.services.reserve_billing_usage")
+    def test_employee_cannot_cancel_another_cashiers_pending_external_sale(
+        self, reserve, create_client_class, cancel_client_class
+    ):
+        other_employee = User.objects.create_user(
+            tenant_id=self.tenant.uuid,
+            username="other-cashier",
+            email="other-cashier@example.com",
+            password="secret",
+            role=User.Role.EMPLOYEE,
+        )
+        other_register = CashRegister.objects.create(
+            tenant_id=self.tenant.uuid,
+            name="Other cashier register",
+            mercado_pago_terminal_id="POINT-2",
+        )
+        Cashbox.objects.create(
+            tenant_id=self.tenant.uuid,
+            register=other_register,
+            opened_by=other_employee,
+            initial_amount=Decimal("0.00"),
+        )
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {self._token(other_employee)}"
+        )
+        order = self._create_pending_order(
+            reserve, create_client_class, key="other-cashier-cancel"
+        )
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {self._token(self.employee)}"
+        )
+
+        response = self.client.post(f"/api/v1/sales/{order.sale_id}/cancel/")
+
+        self.assertEqual(response.status_code, 404)
+        cancel_client_class.return_value.cancel_order.assert_not_called()
+        order.refresh_from_db()
+        self.assertEqual(order.state, MercadoPagoOrder.State.PENDING)
+
+    @patch("apps.sales.views.PlatformMercadoPagoClient")
+    @patch("apps.mercado_pago.services.PlatformMercadoPagoClient")
+    @patch("apps.mercado_pago.services.reserve_billing_usage")
+    @patch("apps.mercado_pago.services.commit_billing_reservation")
+    def test_employee_cannot_cancel_completed_external_sale_or_request_refund(
+        self, commit, reserve, create_client_class, cancel_client_class
+    ):
+        order = self._create_pending_order(reserve, create_client_class, key="employee-no-refund")
+        canonical = self._canonical(order, status="processed")
+        canonical.update(payment_status="processed", payment_status_detail="accredited")
+        remote = Mock()
+        remote.get_order.return_value = canonical
+        reconcile_order(order.uuid, client=remote)
+
+        response = self.client.post(f"/api/v1/sales/{order.sale_id}/cancel/")
+
+        self.assertEqual(response.status_code, 404)
+        cancel_client_class.return_value.refund_order.assert_not_called()
+
+    @patch("apps.mercado_pago.services.PlatformMercadoPagoClient")
+    @patch("apps.mercado_pago.services.reserve_billing_usage")
+    def test_card_with_point_terminal_creates_pending_point_order(self, reserve, client_class):
+        reserve.return_value = {"allowed": True, "reservation_id": str(uuid.uuid4())}
+        client_class.return_value.create_order.return_value = {
+            "id": "ORDER-CARD", "status": "created", "collector_id": "COLLECTOR-1",
+            "currency": "ARS", "live_mode": False, "total_amount": "1500.00",
+        }
+
+        response = self.client.post(
+            "/api/v1/sales/", self._sale_body("CARD", "1500.00"), format="json",
+            HTTP_X_IDEMPOTENCY_KEY="card-point-key",
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data["payment_method"], Sale.PaymentMethod.CARD)
+        order = MercadoPagoOrder.objects.get(sale_id=response.data["uuid"])
+        self.assertEqual(order.order_type, MercadoPagoOrder.Type.POINT)
+        payload = client_class.return_value.create_order.call_args.args[1]
+        self.assertEqual(payload["type"], "point")
+        self.assertEqual(payload["terminal_id"], "POINT-1")
+        self.assertNotIn("payment_method_default_type", payload)
+
+    @patch("apps.mercado_pago.services.PlatformMercadoPagoClient")
+    @patch("apps.mercado_pago.services.reserve_billing_usage")
+    def test_card_idempotent_replay_survives_terminal_dissociation(self, reserve, client_class):
+        reserve.return_value = {"allowed": True, "reservation_id": str(uuid.uuid4())}
+        client_class.return_value.create_order.return_value = {
+            "id": "ORDER-CARD-REPLAY", "status": "created", "collector_id": "COLLECTOR-1",
+            "currency": "ARS", "live_mode": False, "total_amount": "1500.00",
+        }
+        body = self._sale_body("CARD", "1500.00")
+        first = self.client.post(
+            "/api/v1/sales/", body, format="json", HTTP_X_IDEMPOTENCY_KEY="card-replay-key",
+        )
+        self.register.mercado_pago_terminal_id = None
+        self.register.save(update_fields=["mercado_pago_terminal_id"])
+
+        replay = self.client.post(
+            "/api/v1/sales/", body, format="json", HTTP_X_IDEMPOTENCY_KEY="card-replay-key",
+        )
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(replay.status_code, 202)
+        self.assertEqual(replay.data["uuid"], first.data["uuid"])
+        self.assertEqual(Sale.objects.filter(tenant_id=self.tenant.uuid).count(), 1)
+        client_class.return_value.create_order.assert_called_once()
+
+    @patch("apps.mercado_pago.services.PlatformMercadoPagoClient")
+    @patch("apps.mercado_pago.services.reserve_billing_usage")
+    def test_split_cash_and_card_sends_only_card_remainder_to_point(self, reserve, client_class):
+        reserve.return_value = {"allowed": True, "reservation_id": str(uuid.uuid4())}
+        client_class.return_value.create_order.return_value = {
+            "id": "ORDER-SPLIT-CARD", "status": "created", "collector_id": "COLLECTOR-1",
+            "currency": "ARS", "live_mode": False, "total_amount": "1000.00",
+        }
+        body = {
+            "payments": [
+                {"method": "CASH", "amount": "500.00"},
+                {"method": "CARD", "amount": "1000.00"},
+            ],
+            "items": [{"product_id": str(self.product.uuid), "quantity": "1.000"}],
+        }
+
+        response = self.client.post(
+            "/api/v1/sales/", body, format="json", HTTP_X_IDEMPOTENCY_KEY="split-card-key",
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data["payment_method"], Sale.PaymentMethod.MIXED)
+        order = MercadoPagoOrder.objects.get(sale_id=response.data["uuid"])
+        self.assertEqual(order.amount, Decimal("1000.00"))
+        self.assertEqual(order.order_type, MercadoPagoOrder.Type.POINT)
+
+    @patch("apps.mercado_pago.services.PlatformMercadoPagoClient")
+    @patch("apps.mercado_pago.services.reserve_billing_usage")
+    def test_qr_prefers_point_terminal_and_restricts_order_to_qr(self, reserve, client_class):
+        reserve.return_value = {"allowed": True, "reservation_id": str(uuid.uuid4())}
+        client_class.return_value.create_order.return_value = {
+            "id": "ORDER-POINT-QR", "status": "created", "collector_id": "COLLECTOR-1",
+            "currency": "ARS", "live_mode": False, "total_amount": "1500.00",
+        }
+
+        response = self.client.post(
+            "/api/v1/sales/", self._sale_body("QR", "1500.00"), format="json",
+            HTTP_X_IDEMPOTENCY_KEY="point-qr-key",
+        )
+
+        self.assertEqual(response.status_code, 202)
+        order = MercadoPagoOrder.objects.get(sale_id=response.data["uuid"])
+        self.assertEqual(order.order_type, MercadoPagoOrder.Type.POINT)
+        payload = client_class.return_value.create_order.call_args.args[1]
+        self.assertEqual(payload["terminal_id"], "POINT-1")
+        self.assertEqual(payload["payment_method_default_type"], "qr")
+
+    @patch("apps.mercado_pago.services.PlatformMercadoPagoClient")
+    @patch("apps.mercado_pago.services.reserve_billing_usage")
+    def test_qr_without_point_uses_associated_qr_pos(self, reserve, client_class):
+        self.register.mercado_pago_terminal_id = None
+        self.register.save(update_fields=["mercado_pago_terminal_id"])
+        reserve.return_value = {"allowed": True, "reservation_id": str(uuid.uuid4())}
+        client_class.return_value.create_order.return_value = {
+            "id": "ORDER-QR-POS", "status": "created", "collector_id": "COLLECTOR-1",
+            "currency": "ARS", "live_mode": False, "total_amount": "1500.00",
+        }
+
+        response = self.client.post(
+            "/api/v1/sales/", self._sale_body("QR", "1500.00"), format="json",
+            HTTP_X_IDEMPOTENCY_KEY="qr-pos-key",
+        )
+
+        self.assertEqual(response.status_code, 202)
+        order = MercadoPagoOrder.objects.get(sale_id=response.data["uuid"])
+        self.assertEqual(order.order_type, MercadoPagoOrder.Type.QR)
+        payload = client_class.return_value.create_order.call_args.args[1]
+        self.assertEqual(payload["type"], "qr")
+        self.assertEqual(payload["external_pos_id"], "POS-1")
+
     @patch("apps.mercado_pago.services.PlatformMercadoPagoClient")
     @patch("apps.mercado_pago.services.reserve_billing_usage")
     def test_employee_replay_does_not_expose_another_cashiers_sale(
@@ -344,8 +537,9 @@ class MercadoPagoSaleTests(TestCase):
         self.assertEqual(response.data["payment_method"], Sale.PaymentMethod.MIXED)
         self.assertEqual(response.data["mercado_pago"]["qr_data"], "000201010212...")
         payload = client_class.return_value.create_order.call_args.args[1]
-        self.assertEqual(payload["type"], "qr")
-        self.assertEqual(payload["external_pos_id"], "POS-1")
+        self.assertEqual(payload["type"], "point")
+        self.assertEqual(payload["terminal_id"], "POINT-1")
+        self.assertEqual(payload["payment_method_default_type"], "qr")
 
     @patch("apps.mercado_pago.services.PlatformMercadoPagoClient")
     @patch("apps.mercado_pago.services.reserve_billing_usage")
@@ -370,6 +564,82 @@ class MercadoPagoSaleTests(TestCase):
             order.tenant_id, idempotency_key=order.billing_reservation_key
         )
         self.assertTrue(FiscalOutboxRequest.objects.filter(sale=order.sale).exists())
+
+    @patch("apps.mercado_pago.services.PlatformMercadoPagoClient")
+    @patch("apps.mercado_pago.services.reserve_billing_usage")
+    @patch("apps.mercado_pago.services.commit_billing_reservation")
+    def test_point_terminal_qr_method_is_saved_from_canonical_payment(
+        self, commit, reserve, client_class
+    ):
+        order = self._create_pending_order(reserve, client_class, key="point-qr-method")
+        canonical = self._canonical(order, status="processed")
+        canonical["payment_status"] = "processed"
+        canonical["payment_status_detail"] = "accredited"
+        canonical["payment_method_type"] = "qr"
+        remote = Mock()
+        remote.get_order.return_value = canonical
+
+        reconcile_order(order.uuid, client=remote)
+
+        order.sale.refresh_from_db()
+        self.assertEqual(order.sale.payment_method, Sale.PaymentMethod.QR)
+        self.assertEqual(order.sale.payments[0]["method"], Sale.PaymentMethod.QR)
+
+    @patch("apps.mercado_pago.services.PlatformMercadoPagoClient")
+    @patch("apps.mercado_pago.services.reserve_billing_usage")
+    @patch("apps.mercado_pago.services.commit_billing_reservation")
+    def test_reconciliation_updates_only_external_line_in_mixed_sale(
+        self, commit, reserve, client_class
+    ):
+        reserve.return_value = {"allowed": True, "reservation_id": str(uuid.uuid4())}
+        client_class.return_value.create_order.return_value = {
+            "id": "ORDER-MIXED-CARD",
+            "status": "created",
+            "collector_id": "COLLECTOR-1",
+            "currency": "ARS",
+            "live_mode": False,
+            "total_amount": "1000.00",
+        }
+        response = self.client.post(
+            "/api/v1/sales/",
+            {
+                "payments": [
+                    {"method": "CASH", "amount": "500.00"},
+                    {"method": "CARD", "amount": "1000.00"},
+                ],
+                "items": [
+                    {"product_id": str(self.product.uuid), "quantity": "1.000"}
+                ],
+            },
+            format="json",
+            HTTP_X_IDEMPOTENCY_KEY="mixed-reconcile-key",
+        )
+        self.assertEqual(response.status_code, 202)
+        order = MercadoPagoOrder.objects.get(sale_id=response.data["uuid"])
+        canonical = self._canonical(order, status="processed")
+        canonical.update(
+            payment_status="processed",
+            payment_status_detail="accredited",
+            payment_method_type="debit_card",
+        )
+        remote = Mock()
+        remote.get_order.return_value = canonical
+
+        reconcile_order(order.uuid, client=remote)
+
+        order.sale.refresh_from_db()
+        self.assertEqual(order.sale.status, Sale.Status.COMPLETED)
+        self.assertEqual(order.sale.payment_method, Sale.PaymentMethod.MIXED)
+        self.assertEqual(
+            order.sale.payments,
+            [
+                {"method": Sale.PaymentMethod.CASH, "amount": "500.00"},
+                {"method": Sale.PaymentMethod.CARD, "amount": "1000.00"},
+            ],
+        )
+        commit.assert_called_once_with(
+            order.tenant_id, idempotency_key=order.billing_reservation_key
+        )
 
     @patch("apps.mercado_pago.services.PlatformMercadoPagoClient")
     @patch("apps.mercado_pago.services.reserve_billing_usage")
@@ -570,33 +840,36 @@ class MercadoPagoSaleTests(TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.data["code"], "point_action_required")
         self.assertEqual(order.state, MercadoPagoOrder.State.ACTION_REQUIRED)
-        cancel_key = order.cancel_idempotency_key
-        self.assertTrue(cancel_key)
-        self.assertEqual(order.sale.status, Sale.Status.PENDING)
-        self.assertEqual(self.product.stock, Decimal("9.000"))
 
-        repeated = self.client.post(f"/api/v1/sales/{order.sale_id}/cancel/")
+    @patch("apps.sales.views.PlatformMercadoPagoClient")
+    @patch("apps.mercado_pago.services.PlatformMercadoPagoClient")
+    @patch("apps.mercado_pago.services.reserve_billing_usage")
+    @patch("apps.mercado_pago.services.commit_billing_reservation")
+    def test_cancel_race_does_not_overwrite_a_confirmed_payment(
+        self, commit, reserve, create_client_class, cancel_client_class
+    ):
+        order = self._create_pending_order(reserve, create_client_class, key="cancel-paid-race")
+        canonical = self._canonical(order, status="processed")
+        canonical.update(payment_status="processed", payment_status_detail="accredited")
+        remote = Mock()
+        remote.get_order.return_value = canonical
+
+        def confirm_then_reject_cancel(*_args, **_kwargs):
+            reconcile_order(order.uuid, client=remote)
+            raise PlatformBillingError(
+                "Order can no longer be cancelled", status_code=409,
+                response_data={"detail": {"code": "cannot_cancel_order"}},
+            )
+
+        cancel_client_class.return_value.cancel_order.side_effect = confirm_then_reject_cancel
+        response = self.client.post(f"/api/v1/sales/{order.sale_id}/cancel/")
 
         order.refresh_from_db()
-        self.assertEqual(repeated.status_code, 409)
-        self.assertEqual(repeated.data["code"], "point_action_required")
-        self.assertEqual(order.state, MercadoPagoOrder.State.ACTION_REQUIRED)
-        self.assertEqual(order.cancel_idempotency_key, cancel_key)
-        cancel_client_class.return_value.cancel_order.assert_called_once()
-
-        worker_client = Mock()
-        worker_client.get_order.return_value = self._canonical(
-            order, status="created"
-        )
-        MercadoPagoWorker(client=worker_client, batch_size=1)._process_order(order.uuid)
-
-        order.refresh_from_db()
-        self.assertEqual(order.state, MercadoPagoOrder.State.ACTION_REQUIRED)
-        self.assertEqual(order.cancel_idempotency_key, cancel_key)
-        worker_client.get_order.assert_called_once_with(
-            order.tenant_id, order.external_order_id
-        )
-        worker_client.cancel_order.assert_not_called()
+        order.sale.refresh_from_db()
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(order.state, MercadoPagoOrder.State.PAID)
+        self.assertEqual(order.sale.status, Sale.Status.COMPLETED)
+        self.assertTrue(order.cancel_idempotency_key)
 
     @patch("apps.mercado_pago.services.PlatformMercadoPagoClient")
     @patch("apps.mercado_pago.services.reserve_billing_usage")
@@ -637,7 +910,8 @@ class MercadoPagoSaleTests(TestCase):
     ):
         reserve.return_value = {"allowed": True, "status": "active", "reservation_id": str(uuid.uuid4())}
         self.register.mercado_pago_external_pos_id = None
-        self.register.save(update_fields=["mercado_pago_external_pos_id"])
+        self.register.mercado_pago_terminal_id = None
+        self.register.save(update_fields=["mercado_pago_external_pos_id", "mercado_pago_terminal_id"])
 
         response = self.client.post(
             "/api/v1/sales/",

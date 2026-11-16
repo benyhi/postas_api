@@ -180,12 +180,9 @@ def _persist_external_sale(*, request, validated_data, sale_uuid, fingerprint, i
     register = cashbox.register
     if register is None or not register.active:
         raise serializers.ValidationError("The open cashbox has no active cash register.")
-    if external["method"] == Sale.PaymentMethod.POINT and not register.mercado_pago_terminal_id:
+    if external["route"] in {"POINT", "POINT_QR"} and not register.mercado_pago_terminal_id:
         raise serializers.ValidationError("The cash register has no Mercado Pago Point terminal associated.")
-    if (
-        external["method"] == Sale.PaymentMethod.QR
-        and not register.mercado_pago_external_pos_id
-    ):
+    if external["route"] == "QR" and not register.mercado_pago_external_pos_id:
         raise serializers.ValidationError("The cash register has no Mercado Pago QR POS associated.")
 
     payment_method = payments[0]["method"] if len(payments) == 1 else Sale.PaymentMethod.MIXED
@@ -206,7 +203,8 @@ def _persist_external_sale(*, request, validated_data, sale_uuid, fingerprint, i
     reservation_id = reserve_response.get("reservation_id") or reserve_response.get("id") or ""
     order = MercadoPagoOrder.objects.create(
         tenant_id=request.tenant_id, sale=sale, amount=external["amount"],
-        order_type=external["method"], external_reference=str(sale.uuid),
+        order_type="POINT" if external["route"] in {"POINT", "POINT_QR"} else "QR",
+        external_reference=str(sale.uuid),
         terminal_id=register.mercado_pago_terminal_id,
         pos_id=register.mercado_pago_pos_id,
         external_pos_id=register.mercado_pago_external_pos_id,
@@ -228,6 +226,8 @@ def attempt_create_order(order_id, *, client=None):
     }
     if order.order_type == MercadoPagoOrder.Type.POINT:
         payload["terminal_id"] = order.terminal_id
+        if any(payment.get("method") == Sale.PaymentMethod.QR for payment in order.sale.payments):
+            payload["payment_method_default_type"] = "qr"
     else:
         payload.update({"mode": "dynamic", "pos_id": order.pos_id, "external_pos_id": order.external_pos_id})
     try:
@@ -288,6 +288,7 @@ def reconcile_order(order_id, *, client=None):
 
     status_value = str(remote.get("status") or "").lower()
     payment_status = _payment_status(remote)
+    payment_method_type = _payment_method_type(remote)
     MercadoPagoOrder.objects.filter(
         uuid=order.uuid,
         reconcile_version=reconcile_version,
@@ -317,6 +318,7 @@ def reconcile_order(order_id, *, client=None):
             order.uuid,
             MercadoPagoOrder.State.PAID,
             expected_version=reconcile_version,
+            payment_method_type=payment_method_type,
         )
     if status_value in FINAL_REMOTE_FAILED:
         final = MercadoPagoOrder.State.EXPIRED if status_value == "expired" else (
@@ -356,7 +358,7 @@ def _next_reconcile_version(order_id):
 
 
 @transaction.atomic
-def _finalize_order(order_id, final_state, *, expected_version):
+def _finalize_order(order_id, final_state, *, expected_version, payment_method_type=""):
     candidate = MercadoPagoOrder.objects.only("tenant_id", "sale_id").get(uuid=order_id)
     Tenant.objects.select_for_update().get(uuid=candidate.tenant_id)
     cashbox_id = Sale.objects.only("cashbox_id").get(uuid=candidate.sale_id).cashbox_id
@@ -370,8 +372,22 @@ def _finalize_order(order_id, final_state, *, expected_version):
         if sale.status == Sale.Status.CANCELLED or order.state == MercadoPagoOrder.State.REFUNDED:
             return order
         commit_billing_reservation(order.tenant_id, idempotency_key=order.billing_reservation_key)
+        method = {
+            "qr": Sale.PaymentMethod.QR,
+            "credit_card": Sale.PaymentMethod.CARD,
+            "debit_card": Sale.PaymentMethod.CARD,
+        }.get(payment_method_type, Sale.PaymentMethod.POINT if payment_method_type else None)
+        if method:
+            sale.payments = [
+                {**payment, "method": method}
+                if payment.get("method") in {Sale.PaymentMethod.CARD, Sale.PaymentMethod.QR, Sale.PaymentMethod.POINT}
+                else payment
+                for payment in sale.payments
+            ]
+            if len(sale.payments) == 1:
+                sale.payment_method = method
         sale.status = Sale.Status.COMPLETED
-        sale.save(update_fields=["status"])
+        sale.save(update_fields=["status", "payment_method", "payments"])
         order.state = MercadoPagoOrder.State.PAID
         order.next_retry_at = None
         order.save(update_fields=["state", "next_retry_at", "updated_at"])
@@ -454,6 +470,22 @@ def _payment_status(remote):
     payments = (remote.get("transactions") or {}).get("payments") or remote.get("payments") or []
     if payments and isinstance(payments[0], dict):
         return str(payments[0].get("status") or "").lower()
+    return ""
+
+
+def _payment_method_type(remote):
+    if remote.get("payment_method_type"):
+        return str(remote["payment_method_type"]).lower()
+    payment = remote.get("payment") or {}
+    if isinstance(payment, dict):
+        method = payment.get("payment_method") or {}
+        if isinstance(method, dict) and method.get("type"):
+            return str(method["type"]).lower()
+    payments = (remote.get("transactions") or {}).get("payments") or remote.get("payments") or []
+    if payments and isinstance(payments[0], dict):
+        method = payments[0].get("payment_method") or {}
+        if isinstance(method, dict) and method.get("type"):
+            return str(method["type"]).lower()
     return ""
 
 
